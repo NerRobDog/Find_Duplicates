@@ -1,16 +1,14 @@
 import hashlib
 
 
-def compute_hash(filepath, hash_type) -> str:
-    """Calculates and returns the hash value of a file.
-
-    Args:
-        file_path (str): The path to the file to hash.
-
-    Returns:
-        str: The hash value of the file.
+def compute_hash(filepath: str, hash_type: str = "sha256") -> str:
     """
-    pass
+    Вычисляет хэш файла указанного типа.
+
+    :param filepath: Путь к файлу.
+    :param hash_type: Тип хэша (md5, sha1, sha256, sha512). По умолчанию sha256.
+    :return: Хэш файла в шестнадцатеричном формате.
+    """
 
 
 def get_partial_content(filepath, size=1024) -> bytes:

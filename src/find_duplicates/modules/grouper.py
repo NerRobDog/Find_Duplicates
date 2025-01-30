@@ -1,10 +1,48 @@
+from os import path
+import hashlib
+
+""" """
+
+
 def group_files_by_hash(file_paths: list) -> dict:
-    """Groups files by their hash values.
+    """Группирует файлы по их хешу.
 
-    Args:
-        file_paths (list): A list of file paths to be grouped.
-
-    Returns:
-        dict: A dictionary where keys are hash values and values are lists of file paths.
+    :param file_paths: Список путей файлов для группировки.
+    :type file_paths: List[str]
+    :returns: Словарь, где ключи - это хеши файлов, значения - списки файлов с этим хешем.
+    :rtype: Dict[str, List[str]]
     """
-    pass
+    if not file_paths:
+        print("Пустой список файлов = нет хеша.")
+        return {}
+
+    hash_dict = {}
+    print("Группировка по хешу пока не реализована")
+
+    return hash_dict
+
+
+def group_files_by_size(file_list) -> dict:
+    """Группирует файлы по их размеру.
+
+    :param file_list: Список файлов для группировки.
+    :type file_list: List[str]
+    :returns: Словарь, ключи - это размер файлов в байтах, значения - списки файлов с этим размером.
+    """
+    if not file_list:
+        print("Пустой список файлов = нет размера.")
+        return {}
+
+    size_dict = {}
+
+    for file in file_list:
+        try:
+            file_size = path.getsize(file)
+            if file_size not in size_dict:
+                size_dict[file_size] = []
+            size_dict[file_size].append(file)
+
+        except FileNotFoundError:
+            print(f"Файл {file} не найден.")
+
+    return size_dict

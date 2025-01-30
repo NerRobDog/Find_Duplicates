@@ -1,8 +1,9 @@
 import argparse
-from modules import scanner, grouper, hasher, comparer, output, logger
+from modules import scanner, grouper, hasher, comparer, output, logger, utils
 
 
 def main():
+    """ Основной модуль для поиска дубликатов файлов """
     # Парсинг аргументов
     args = parse_arguments()
 
