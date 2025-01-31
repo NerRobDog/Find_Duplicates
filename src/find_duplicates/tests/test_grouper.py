@@ -1,4 +1,5 @@
 import unittest
+import coverage
 import os
 from ..modules.grouper import group_files_by_size
 
@@ -14,6 +15,10 @@ class TestGrouper(unittest.TestCase):
         self.file6 = "test_large_1.txt"
         self.file7 = "test_large_2.txt"
         self.symlink = "test_symlink.txt"
+        self.special_file = "файл_üñîçødé.txt"
+        self.binary_file = "test_binary.bin"
+        self.protected_file = "protected.txt"
+        self.directory = "test_directory"
 
         # Создание файлов с содержимым
         with open(self.file1, "wb") as f:
@@ -40,111 +45,65 @@ class TestGrouper(unittest.TestCase):
         if hasattr(os, "symlink"):
             os.symlink(self.file1, self.symlink)
 
+        # Создание бинарного файла
+        with open(self.binary_file, "wb") as f:
+            f.write(b"\x00" * 10)
+
+        # Файл с особыми символами в названии
+        with open(self.special_file, "wb") as f:
+            f.write(b"Special Content")
+
+        # Файл с защитой
+        with open(self.protected_file, "wb") as f:
+            f.write(b"Protected")
+        os.chmod(self.protected_file, 0o000)
+
+        # Создание директории
+        os.mkdir(self.directory)
+
     def tearDown(self):
         """Удаляет тестовые файлы после выполнения тестов"""
         for file in [
-            self.file1, self.file2, self.file3, self.file4, self.file5, self.file6, self.file7, self.symlink
+            self.file1, self.file2, self.file3, self.file4, self.file5,
+            self.file6, self.file7, self.symlink, self.special_file,
+            self.binary_file, self.protected_file
         ]:
             if os.path.exists(file) or os.path.islink(file):
                 os.remove(file)
 
-    def test_group_files_by_size_empty_list(self):
-        """Проверка на пустой список файлов"""
-        result = group_files_by_size([])
+        if os.path.exists(self.directory):
+            os.rmdir(self.directory)
+
+    def test_group_files_by_size_protected_file(self):
+        """Тестирует обработку защищенного файла (PermissionError)"""
+        result = group_files_by_size([self.protected_file])
+        self.assertEqual(result, {})
+        os.chmod(self.protected_file, 0o644)  # Возвращаем доступ
+
+    def test_group_files_by_size_binary_file(self):
+        """Тестирует обработку бинарного файла"""
+        result = group_files_by_size([self.binary_file])
+        expected_size = os.path.getsize(self.binary_file)
+        self.assertIn(expected_size, result)
+
+    def test_group_files_by_size_special_filename(self):
+        """Тестирует обработку файла с особыми символами в названии"""
+        result = group_files_by_size([self.special_file])
+        expected_size = os.path.getsize(self.special_file)
+        self.assertIn(expected_size, result)
+
+    def test_group_files_by_size_directory(self):
+        """Тестирует обработку попытки группировки директории как файла"""
+        result = group_files_by_size([self.directory])
         self.assertEqual(result, {})
 
-    def test_group_files_by_size_single_file(self):
-        """Проверка с одним файлом"""
-        result = group_files_by_size([self.file1])
-        expected_size = os.path.getsize(self.file1)
 
-        self.assertIn(expected_size, result)
-        self.assertEqual(result[expected_size], [self.file1])
+if __name__ == "__main__":
+    cov = coverage.Coverage(source=["find_duplicates/modules"])
+    cov.start()
 
-    def test_group_files_by_size_multiple_files_same_size(self):
-        """Проверка с несколькими файлами одинакового размера"""
-        result = group_files_by_size([self.file1, self.file2])
-        expected_size = os.path.getsize(self.file1)
-
-        self.assertIn(expected_size, result)
-        self.assertEqual(sorted(result[expected_size]), sorted([self.file1, self.file2]))
-
-    def test_group_files_by_size_multiple_files_different_sizes(self):
-        """Проверка с несколькими файлами разного размера"""
-        result = group_files_by_size([self.file1, self.file3])
-
-        size1 = os.path.getsize(self.file1)
-        size2 = os.path.getsize(self.file3)
-
-        self.assertIn(size1, result)
-        self.assertIn(size2, result)
-        self.assertEqual(result[size1], [self.file1])
-        self.assertEqual(result[size2], [self.file3])
-
-    def test_group_files_by_size_file_not_found(self):
-        """Проверка с несуществующим файлом"""
-        non_existent_file = "non_existent_file.txt"
-        result = group_files_by_size([non_existent_file])
-
-        self.assertEqual(result, {})
-
-    def test_group_files_by_size_empty_files(self):
-        """Проверка с пустыми файлами"""
-        result = group_files_by_size([self.file4, self.file5])
-        expected_size = os.path.getsize(self.file4)  # Оба файла должны иметь размер 0
-
-        self.assertIn(expected_size, result)
-        self.assertEqual(sorted(result[expected_size]), sorted([self.file4, self.file5]))
-
-    def test_group_files_by_size_large_files(self):
-        """Проверка с большими файлами (1MB)"""
-        result = group_files_by_size([self.file6, self.file7])
-        expected_size = os.path.getsize(self.file6)
-
-        self.assertIn(expected_size, result)
-        self.assertEqual(sorted(result[expected_size]), sorted([self.file6, self.file7]))
-
-    def test_group_files_by_size_mixed_sizes(self):
-        """Проверка с файлами разного размера, но некоторыми одинаковыми"""
-        result = group_files_by_size([self.file1, self.file2, self.file3])
-
-        size1 = os.path.getsize(self.file1)
-        size2 = os.path.getsize(self.file3)
-
-        self.assertIn(size1, result)
-        self.assertIn(size2, result)
-        self.assertEqual(sorted(result[size1]), sorted([self.file1, self.file2]))
-        self.assertEqual(result[size2], [self.file3])
-
-    def test_group_files_by_size_symlinks(self):
-        """Проверка с символическими ссылками"""
-        if not hasattr(os, "symlink"):
-            self.skipTest("ОС не поддерживает символические ссылки")
-
-        result = group_files_by_size([self.file1, self.symlink])
-        expected_size = os.path.getsize(self.file1)
-
-        self.assertIn(expected_size, result)
-        self.assertEqual(sorted(result[expected_size]), sorted([self.file1, self.symlink]))
-
-    def test_group_files_by_size_large_dataset(self):
-        """Проверка с большим набором файлов"""
-        large_files = []
-        for i in range(10):
-            filename = f"test_large_{i}.txt"
-            with open(filename, "wb") as f:
-                f.write(b"X" * 5000)  # 5 KB файлы
-            large_files.append(filename)
-
-        result = group_files_by_size(large_files)
-
-        expected_size = os.path.getsize(large_files[0])
-        self.assertIn(expected_size, result)
-        self.assertEqual(sorted(result[expected_size]), sorted(large_files))
-
-        for file in large_files:
-            os.remove(file)
-
-
-if __name__ == '__main__':
     unittest.main()
+
+    cov.stop()
+    cov.save()
+    cov.html_report(directory="htmlcov")

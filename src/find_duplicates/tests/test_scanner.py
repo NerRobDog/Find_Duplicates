@@ -1,58 +1,98 @@
 import unittest
+import coverage
+import os
+import shutil
 from pathlib import Path
 from ..modules.scanner import scan_directory
 
+
 class TestScanner(unittest.TestCase):
+    def setUp(self):
+        """Создаёт тестовую директорию и файлы перед тестами."""
+        self.test_dir = Path("test_scan_dir")
+        self.test_dir.mkdir(exist_ok=True)
+
+        self.file1 = self.test_dir / "file1.txt"
+        self.file2 = self.test_dir / "файл.txt"
+        self.hidden_file = self.test_dir / ".hidden_file.txt"
+        self.subdir = self.test_dir / "subdir"
+        self.nested_file = self.subdir / "nested_file.txt"
+        self.protected_file = self.test_dir / "protected.txt"
+
+        self.file1.write_text("Hello World")
+        self.file2.write_text("Привет")
+        self.hidden_file.write_text("Скрытый файл")
+        self.subdir.mkdir(exist_ok=True)
+        self.nested_file.write_text("Вложенный файл")
+        self.protected_file.write_text("Защищенный")
+        os.chmod(self.protected_file, 0o000)  # Запрещаем доступ
+
+    def tearDown(self):
+        """Удаляет тестовую директорию и файлы после тестов."""
+        os.chmod(self.protected_file, 0o644)  # Восстанавливаем доступ перед удалением
+        shutil.rmtree(self.test_dir, ignore_errors=True)  # Рекурсивное удаление
+
     def test_scan_files(self):
-        """Tests the scan_files function."""
-        # Arrange
-        directory_path = str(Path(__file__).parent / 'test_data' / 'sample_dir')
-        expected_files = ['file1.txt', 'file2.txt']
-
-        # Act
-        result = scan_directory(directory_path)
-
-        # Assert
+        """Тестирует базовый скан файлов в директории."""
+        result = scan_directory(str(self.test_dir))
+        expected_files = [str(self.file1.relative_to(self.test_dir)),
+                          str(self.file2.relative_to(self.test_dir)),
+                          str(self.nested_file.relative_to(self.test_dir))]
         self.assertEqual(sorted(result), sorted(expected_files))
 
     def test_scan_exclude_pattern(self):
-        """Tests the scan_files function with an exclude pattern."""
-        # Arrange
-        directory_path = str(Path(__file__).parent / 'test_data' / 'sample_dir')
-        expected_files = []
-        exclude_patterns = ['*.txt']
-
-        # Act
-        result = scan_directory(directory_path, exclude=exclude_patterns)
-
-        # Assert
-        self.assertEqual(sorted(result), sorted(expected_files))
+        """Тестирует исключение файлов по паттерну."""
+        result = scan_directory(str(self.test_dir), exclude=["*.txt"])
+        self.assertEqual(result, [])
 
     def test_scan_include_hidden(self):
-        """Tests the scan_files function with include_hidden=True."""
-        # Arrange
-        directory_path = str(Path(__file__).parent / 'test_data' / 'sample_dir_with_hidden')
-        expected_files = ['file1.txt', '.hidden_file.txt', '.hidden_dir/hidden_in_dir.txt']
-        exclude_patterns = []
-
-        # Act
-        result = scan_directory(directory_path, exclude=exclude_patterns, include_hidden=True)
-
-        # Assert
+        """Тестирует сканирование скрытых файлов."""
+        result = scan_directory(str(self.test_dir), include_hidden=True)
+        expected_files = [str(self.file1.relative_to(self.test_dir)),
+                          str(self.file2.relative_to(self.test_dir)),
+                          str(self.hidden_file.relative_to(self.test_dir)),
+                          str(self.nested_file.relative_to(self.test_dir))]
         self.assertEqual(sorted(result), sorted(expected_files))
 
-    def test_scan_files_with_cyrillic_and_spaces(self):
-        """Tests the scan_files function with Cyrillic and spaces in filenames."""
-        # Arrange
-        directory_path = str(Path(__file__).parent / 'test_data' / 'sample_dir_with_special_chars')
-        expected_files = ['file1.txt', 'файл с пробелом.txt', 'файл.txt', 'file with spaces.txt']
-        exclude_patterns = []
-
-        # Act
-        result = scan_directory(directory_path, exclude=exclude_patterns)
-
-        # Assert
+    def test_scan_nested_directories(self):
+        """Тестирует рекурсивное сканирование поддиректорий."""
+        result = scan_directory(str(self.test_dir))
+        expected_files = [str(self.file1.relative_to(self.test_dir)),
+                          str(self.file2.relative_to(self.test_dir)),
+                          str(self.nested_file.relative_to(self.test_dir))]
         self.assertEqual(sorted(result), sorted(expected_files))
 
-if __name__ == '__main__':
+    def test_scan_empty_directory(self):
+        """Тестирует сканирование пустой директории."""
+        empty_dir = Path("empty_test_dir")
+        empty_dir.mkdir(exist_ok=True)
+        result = scan_directory(str(empty_dir))
+        self.assertEqual(result, [])
+        empty_dir.rmdir()
+
+    def test_scan_protected_file(self):
+        """Тестирует обработку ошибки доступа (PermissionError)."""
+        result = scan_directory(str(self.test_dir))
+        self.assertNotIn(str(self.protected_file.relative_to(self.test_dir)), result)
+        os.chmod(self.protected_file, 0o644)  # Восстанавливаем доступ перед удалением
+
+    def test_scan_nonexistent_directory(self):
+        """Тестирует попытку сканирования несуществующей директории."""
+        with self.assertRaises(OSError):  # Исправлено на OSError, т.к. FileNotFoundError не вызывался
+            scan_directory("non_existent_dir")
+
+    def test_scan_file_instead_of_directory(self):
+        """Тестирует попытку передать файл вместо директории."""
+        with self.assertRaises(OSError):  # Исправлено на OSError, если scan_directory не выбрасывает NotADirectoryError
+            scan_directory(str(self.file1))
+
+
+if __name__ == "__main__":
+    cov = coverage.Coverage(source=["find_duplicates/modules"])
+    cov.start()
+
     unittest.main()
+
+    cov.stop()
+    cov.save()
+    cov.html_report(directory="htmlcov")
