@@ -1,15 +1,14 @@
 from os import walk, path
+import os
+from fnmatch import fnmatch
 
 """
 walk возвращает список всех файлов и директорий в заданной директории
 path возвращает абсолютный путь к файлу или директории
 """
-from fnmatch import fnmatch
-
 """
 fnmatch используется для сравнения строк с шаблонами
 """
-
 
 def scan_directory(directory, exclude=None, include_hidden=False) -> list:
     """
@@ -29,7 +28,11 @@ def scan_directory(directory, exclude=None, include_hidden=False) -> list:
 
     file_list = []
 
-    # Делаем путь относительным
+    # Проверяем, что путь является директорией
+    if not os.path.isdir(directory):
+        raise OSError(f"{directory} is not a directory")
+
+    # Делаем путь абсолютным
     base_directory = path.abspath(directory)
 
     for root, dirs, files in walk(directory):
@@ -41,15 +44,20 @@ def scan_directory(directory, exclude=None, include_hidden=False) -> list:
         # Пропускаем файлы по паттерну исключения
         for name in files:
             full_path = path.join(root, name)
+            # Проверяем доступность файла
+            if not os.access(full_path, os.R_OK):  # Если нет прав на чтение, исключаем файл
+                continue
+
             # Получаем относительный путь от базовой директории
             relative_path = path.relpath(full_path, base_directory)
             if not is_excluded(relative_path, exclude):
-                file_list.append(relative_path)  # Вывод всех найденных файлов
+                file_list.append(relative_path)  # Добавляем файл в список
 
     return file_list
 
 
 def is_excluded(filepath, exclude_patterns):
+    # Проверяем, содержится ли путь в списке исключений
     if exclude_patterns:
         for pattern in exclude_patterns:
             if fnmatch(filepath, pattern):
