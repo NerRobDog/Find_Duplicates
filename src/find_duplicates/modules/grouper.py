@@ -37,12 +37,22 @@ def group_files_by_size(file_list) -> dict:
 
     for file in file_list:
         try:
-            file_size = path.getsize(file)
+            # Пропускаем директории
+            if not os.path.isfile(file):
+                continue
+            # Проверяем доступ к файлу перед вызовом getsize()
+            if not os.access(file, os.R_OK):
+                print(f"Нет доступа к файлу {file}, пропускаем.")
+                continue
+
+            file_size = os.path.getsize(file)
             if file_size not in size_dict:
                 size_dict[file_size] = []
             size_dict[file_size].append(file)
 
         except FileNotFoundError:
             print(f"Файл {file} не найден.")
+        except PermissionError:
+            print(f"Нет доступа к файлу {file}, пропускаем.")
 
     return size_dict

@@ -88,11 +88,15 @@ class TestScanner(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    cov = coverage.Coverage(source=["find_duplicates/modules"])
+    cov = coverage.Coverage(source=["find_duplicates"], branch=True)
     cov.start()
+    print('cov started')
 
-    unittest.main()
-
-    cov.stop()
-    cov.save()
-    cov.html_report(directory="htmlcov")
+    try:
+        unittest.main()
+    finally:
+        cov.stop()
+        print('cov stopper')
+        cov.save()
+        cov.report()
+        cov.html_report(directory="htmlcov")

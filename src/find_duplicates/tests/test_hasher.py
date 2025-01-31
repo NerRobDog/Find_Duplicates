@@ -108,6 +108,10 @@ class TestHasher(unittest.TestCase):
         self.assertEqual(results, {})
 
 
+import unittest
+import coverage
+import os
+
 if __name__ == "__main__":
     cov = coverage.Coverage(source=["find_duplicates/modules"])
     cov.start()
@@ -117,3 +121,4 @@ if __name__ == "__main__":
     cov.stop()
     cov.save()
     cov.html_report(directory="htmlcov")
+    os.system("open htmlcov/index.html")  # Открывает браузер

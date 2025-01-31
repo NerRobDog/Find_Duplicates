@@ -77,7 +77,7 @@ class TestGrouper(unittest.TestCase):
     def test_group_files_by_size_protected_file(self):
         """Тестирует обработку защищенного файла (PermissionError)"""
         result = group_files_by_size([self.protected_file])
-        self.assertEqual(result, {})
+        self.assertEqual({}, result)
         os.chmod(self.protected_file, 0o644)  # Возвращаем доступ
 
     def test_group_files_by_size_binary_file(self):
@@ -95,15 +95,17 @@ class TestGrouper(unittest.TestCase):
     def test_group_files_by_size_directory(self):
         """Тестирует обработку попытки группировки директории как файла"""
         result = group_files_by_size([self.directory])
-        self.assertEqual(result, {})
+        self.assertEqual({}, result)
 
 
 if __name__ == "__main__":
-    cov = coverage.Coverage(source=["find_duplicates/modules"])
+    cov = coverage.Coverage(source=["find_duplicates/modules"], branch=True)
     cov.start()
 
-    unittest.main()
-
-    cov.stop()
-    cov.save()
-    cov.html_report(directory="htmlcov")
+    try:
+        unittest.main()
+    finally:
+        cov.stop()
+        cov.save()
+        cov.report()
+        cov.html_report(directory="htmlcov")
