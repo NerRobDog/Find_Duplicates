@@ -1,102 +1,151 @@
-import unittest
-import coverage
 import os
+import tempfile
 import shutil
-from pathlib import Path
-from ..modules.scanner import scan_directory
+import unittest
+from parameterized import parameterized
+from find_duplicates.modules.scanner import scan_directory, is_excluded
 
 
-class TestScanner(unittest.TestCase):
+class TestScannerParameterized(unittest.TestCase):
     def setUp(self):
-        """Создаёт тестовую директорию и файлы перед тестами."""
-        self.test_dir = Path("test_scan_dir")
-        self.test_dir.mkdir(exist_ok=True)
-
-        self.file1 = self.test_dir / "file1.txt"
-        self.file2 = self.test_dir / "файл.txt"
-        self.hidden_file = self.test_dir / ".hidden_file.txt"
-        self.subdir = self.test_dir / "subdir"
-        self.nested_file = self.subdir / "nested_file.txt"
-        self.protected_file = self.test_dir / "protected.txt"
-
-        self.file1.write_text("Hello World")
-        self.file2.write_text("Привет")
-        self.hidden_file.write_text("Скрытый файл")
-        self.subdir.mkdir(exist_ok=True)
-        self.nested_file.write_text("Вложенный файл")
-        self.protected_file.write_text("Защищенный")
-        os.chmod(self.protected_file, 0o000)  # Запрещаем доступ
+        self.test_dir = tempfile.mkdtemp()
+        # Базовые файлы: обычный и скрытый
+        with open(os.path.join(self.test_dir, "file.txt"), "w", encoding="utf-8") as f:
+            f.write("Content")
+        with open(os.path.join(self.test_dir, ".hidden.txt"), "w", encoding="utf-8") as f:
+            f.write("Hidden")
 
     def tearDown(self):
-        """Удаляет тестовую директорию и файлы после тестов."""
-        os.chmod(self.protected_file, 0o644)  # Восстанавливаем доступ перед удалением
-        shutil.rmtree(self.test_dir, ignore_errors=True)  # Рекурсивное удаление
+        shutil.rmtree(self.test_dir)
 
-    def test_scan_files(self):
-        """Тестирует базовый скан файлов в директории."""
-        result = scan_directory(str(self.test_dir))
-        expected_files = [str(self.file1.relative_to(self.test_dir)),
-                          str(self.file2.relative_to(self.test_dir)),
-                          str(self.nested_file.relative_to(self.test_dir))]
-        self.assertEqual(sorted(result), sorted(expected_files))
+    @parameterized.expand([
+        ("without_hidden", False, ["file.txt"]),
+        ("with_hidden", True, ["file.txt", ".hidden.txt"]),
+    ])
+    def test_include_hidden(self, name, include_hidden, expected):
+        result = scan_directory(self.test_dir, include_hidden=include_hidden)
+        self.assertEqual(sorted(result), sorted(expected))
 
-    def test_scan_exclude_pattern(self):
-        """Тестирует исключение файлов по паттерну."""
-        result = scan_directory(str(self.test_dir), exclude=["*.txt"])
+    def test_nested_directories(self):
+        # Создаём вложенную директорию с файлом
+        nested_dir = os.path.join(self.test_dir, "subdir")
+        os.mkdir(nested_dir)
+        nested_file = os.path.join(nested_dir, "nested.txt")
+        with open(nested_file, "w") as f:
+            f.write("Nested")
+        result = scan_directory(self.test_dir, include_hidden=True)
+        self.assertIn("subdir/nested.txt", result)
+
+    def test_symlink_handling(self):
+        # Если ОС поддерживает симлинки
+        if hasattr(os, "symlink"):
+            target_file = os.path.join(self.test_dir, "file.txt")
+            symlink_path = os.path.join(self.test_dir, "link.txt")
+            os.symlink(target_file, symlink_path)
+            # При follow_symlinks=False симлинк не должен попадать в результат
+            result_no_follow = scan_directory(self.test_dir, include_hidden=True, follow_symlinks=False)
+            self.assertNotIn("link.txt", result_no_follow)
+            # При follow_symlinks=True симлинк должен включаться
+            result_follow = scan_directory(self.test_dir, include_hidden=True, follow_symlinks=True)
+            self.assertIn("link.txt", result_follow)
+        else:
+            self.skipTest("Симлинки не поддерживаются в этой ОС")
+
+    def test_path_not_directory(self):
+        # Передаём файл вместо директории – ожидается OSError
+        file_path = os.path.join(self.test_dir, "file.txt")
+        with self.assertRaises(OSError):
+            scan_directory(file_path)
+
+    def test_files_without_permission(self):
+        # Создаём файл и убираем права на чтение
+        no_read_file = os.path.join(self.test_dir, "noread.txt")
+        with open(no_read_file, "w") as f:
+            f.write("Secret")
+        os.chmod(no_read_file, 0o000)
+        result = scan_directory(self.test_dir, include_hidden=True)
+        self.assertNotIn("noread.txt", result)
+        os.chmod(no_read_file, 0o644)
+
+    @parameterized.expand([
+        ("exclude_all_txt", ["*.txt"], []),
+        ("exclude_hidden", [".*"], ["file.txt"]),
+    ])
+    def test_exclude_patterns(self, name, exclude_patterns, expected_files):
+        # Добавляем ещё один файл, чтобы проверить работу шаблонов
+        extra_file = os.path.join(self.test_dir, "keep.log")
+        with open(extra_file, "w") as f:
+            f.write("Log data")
+        result = scan_directory(self.test_dir, exclude=exclude_patterns, include_hidden=True)
+        # Проверяем, что ни один файл не удовлетворяет исключающему шаблону
+        for f in result:
+            for pattern in exclude_patterns:
+                self.assertFalse(is_excluded(f, [pattern]))
+        # Проверяем, что ожидаемые файлы присутствуют
+        for exp in expected_files:
+            self.assertIn(exp, result)
+
+    def test_unicode_filenames(self):
+        # Файл с non-ASCII именем
+        unicode_file = os.path.join(self.test_dir, "файл.txt")
+        with open(unicode_file, "w", encoding="utf-8") as f:
+            f.write("Unicode")
+        result = scan_directory(self.test_dir, include_hidden=True)
+        self.assertIn("файл.txt", result)
+
+    def test_spaces_in_filename(self):
+        # Файл с пробелами в имени
+        spaced_file = os.path.join(self.test_dir, "file with spaces.txt")
+        with open(spaced_file, "w") as f:
+            f.write("Spaces")
+        result = scan_directory(self.test_dir, include_hidden=True)
+        self.assertIn("file with spaces.txt", result)
+
+    def test_nonexistent_directory(self):
+        # Передаём несуществующую директорию
+        non_exist_dir = os.path.join(self.test_dir, "nonexistent")
+        with self.assertRaises(OSError):
+            scan_directory(non_exist_dir)
+
+    def test_deep_nested_directories(self):
+        # Создаём цепочку вложенных директорий
+        deep_dir = self.test_dir
+        for i in range(5):
+            deep_dir = os.path.join(deep_dir, f"nested{i}")
+            os.mkdir(deep_dir)
+        deep_file = os.path.join(deep_dir, "deep.txt")
+        with open(deep_file, "w") as f:
+            f.write("Deep content")
+        result = scan_directory(self.test_dir, include_hidden=True)
+        expected_rel = os.path.relpath(deep_file, os.path.abspath(self.test_dir))
+        self.assertIn(expected_rel, result)
+
+    def test_multiple_exclude_patterns(self):
+        # Создаём файлы с различными расширениями
+        for fname, content in [("a.txt", "A"), ("b.log", "B"), ("c.tmp", "C")]:
+            with open(os.path.join(self.test_dir, fname), "w") as f:
+                f.write(content)
+        # Исключаем файлы с расширениями .txt и .tmp
+        result = scan_directory(self.test_dir, exclude=["*.txt", "*.tmp"], include_hidden=True)
+        self.assertNotIn("a.txt", result)
+        self.assertNotIn("c.tmp", result)
+        self.assertIn("b.log", result)
+
+    def test_relative_paths(self):
+        # Проверяем, что возвращаемые пути относительные относительно базовой директории
+        file_path = os.path.join(self.test_dir, "relative.txt")
+        with open(file_path, "w") as f:
+            f.write("Relative")
+        result = scan_directory(self.test_dir, include_hidden=True)
+        for path in result:
+            self.assertFalse(os.path.isabs(path))
+
+    def test_empty_directory(self):
+        # Тестирование пустой директории
+        empty_dir = os.path.join(self.test_dir, "empty")
+        os.mkdir(empty_dir)
+        result = scan_directory(empty_dir, include_hidden=True)
         self.assertEqual(result, [])
-
-    def test_scan_include_hidden(self):
-        """Тестирует сканирование скрытых файлов."""
-        result = scan_directory(str(self.test_dir), include_hidden=True)
-        expected_files = [str(self.file1.relative_to(self.test_dir)),
-                          str(self.file2.relative_to(self.test_dir)),
-                          str(self.hidden_file.relative_to(self.test_dir)),
-                          str(self.nested_file.relative_to(self.test_dir))]
-        self.assertEqual(sorted(result), sorted(expected_files))
-
-    def test_scan_nested_directories(self):
-        """Тестирует рекурсивное сканирование поддиректорий."""
-        result = scan_directory(str(self.test_dir))
-        expected_files = [str(self.file1.relative_to(self.test_dir)),
-                          str(self.file2.relative_to(self.test_dir)),
-                          str(self.nested_file.relative_to(self.test_dir))]
-        self.assertEqual(sorted(result), sorted(expected_files))
-
-    def test_scan_empty_directory(self):
-        """Тестирует сканирование пустой директории."""
-        empty_dir = Path("empty_test_dir")
-        empty_dir.mkdir(exist_ok=True)
-        result = scan_directory(str(empty_dir))
-        self.assertEqual(result, [])
-        empty_dir.rmdir()
-
-    def test_scan_protected_file(self):
-        """Тестирует обработку ошибки доступа (PermissionError)."""
-        result = scan_directory(str(self.test_dir))
-        self.assertNotIn(str(self.protected_file.relative_to(self.test_dir)), result)
-        os.chmod(self.protected_file, 0o644)  # Восстанавливаем доступ перед удалением
-
-    def test_scan_nonexistent_directory(self):
-        """Тестирует попытку сканирования несуществующей директории."""
-        with self.assertRaises(OSError):  # Исправлено на OSError, т.к. FileNotFoundError не вызывался
-            scan_directory("non_existent_dir")
-
-    def test_scan_file_instead_of_directory(self):
-        """Тестирует попытку передать файл вместо директории."""
-        with self.assertRaises(OSError):  # Исправлено на OSError, если scan_directory не выбрасывает NotADirectoryError
-            scan_directory(str(self.file1))
-
 
 if __name__ == "__main__":
-    cov = coverage.Coverage(source=["find_duplicates"], branch=True)
-    cov.start()
-    print('cov started')
-
-    try:
-        unittest.main()
-    finally:
-        cov.stop()
-        print('cov stopper')
-        cov.save()
-        cov.report()
-        cov.html_report(directory="htmlcov")
+    unittest.main()

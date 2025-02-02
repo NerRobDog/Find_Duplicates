@@ -1,4 +1,4 @@
-from os import path
+import os
 import hashlib
 
 """ """
