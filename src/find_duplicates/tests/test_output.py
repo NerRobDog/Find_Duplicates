@@ -1,104 +1,165 @@
+# Файл: tests/test_output.py
 import os
-import io
-import csv
+import unittest
 import tempfile
 import shutil
-import unittest
-from parameterized import parameterized
-from find_duplicates.modules.output import write_duplicates_to_csv, print_results, save_results_to_file
+from find_duplicates.modules.output import write_duplicates_to_csv, print_tree_view, save_tree_to_txt
+from io import StringIO
+from unittest.mock import patch
 
 
-class TestOutput(unittest.TestCase):
+class TestOutputCSV(unittest.TestCase):
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
+        self.temp_dir = tempfile.mkdtemp()
 
     def tearDown(self):
-        shutil.rmtree(self.test_dir)
+        shutil.rmtree(self.temp_dir)
 
-    @parameterized.expand([
-        ("with_data", {"group1": ["file1.txt", "file2.txt"], "group2": ["file3.txt"]}),
-        ("empty_dict", {})
-    ])
-    def test_write_duplicates_to_csv(self, name, duplicates):
-        output_file = os.path.join(self.test_dir, "duplicates.csv")
-        # Записываем дубликаты в CSV
-        write_duplicates_to_csv(duplicates, output_file)
+    def test_write_duplicates_to_csv_valid(self):
+        """
+        Запись корректного словаря в CSV.
+        """
+        output_file = os.path.join(self.temp_dir, "duplicates.csv")
+        duplicates = {
+            "hash123": [
+                {"path": "/some/path/file1.txt", "size": 123},
+                {"path": "/some/path/file2.txt", "size": 123}
+            ],
+            "hash456": [
+                {"path": "/some/path/file3.txt", "size": 456}
+            ]
+        }
+        result = write_duplicates_to_csv(duplicates, output_file)
+        self.assertTrue(result)
         self.assertTrue(os.path.exists(output_file))
-        # Читаем файл и проверяем, что в содержимом есть разделители (например, запятые)
+
         with open(output_file, "r", encoding="utf-8") as f:
             content = f.read()
-        if duplicates:
             self.assertIn(",", content)
-        else:
-            self.assertTrue(len(content) >= 0)
+            self.assertIn("Группа,Путь,Размер", content)
+
+    def test_write_duplicates_to_csv_empty(self):
+        """
+        Запись пустого словаря => только заголовок
+        """
+        output_file = os.path.join(self.temp_dir, "duplicates_empty.csv")
+        duplicates = {}
+        result = write_duplicates_to_csv(duplicates, output_file)
+        self.assertTrue(result)
+        with open(output_file, "r", encoding="utf-8") as f:
+            content = f.read()
+            self.assertIn("Группа,Путь,Размер", content)
 
     def test_write_duplicates_to_csv_invalid_path(self):
-        # Используем несуществующую директорию для записи
-        invalid_path = os.path.join(self.test_dir, "nonexistent_dir", "duplicates.csv")
-        with self.assertRaises(Exception):
-            write_duplicates_to_csv({"group": ["file.txt"]}, invalid_path)
+        """
+        Указываем путь в несуществующую директорию => ожидаем False
+        """
+        invalid_dir = os.path.join(self.temp_dir, "nonexistent_dir")
+        output_file = os.path.join(invalid_dir, "output.csv")
+        duplicates = {"hash000": [{"path": "dummy.txt", "size": 100}]}
+        result = write_duplicates_to_csv(duplicates, output_file)
+        self.assertFalse(result)
+        self.assertFalse(os.path.exists(output_file))
 
-    def test_print_results(self):
-        duplicates = {"group1": ["file1.txt", "file2.txt"]}
-        captured_output = io.StringIO()
-        import sys
-        old_stdout = sys.stdout
-        sys.stdout = captured_output
-        try:
-            print_results(duplicates)
-        finally:
-            sys.stdout = old_stdout
-        output = captured_output.getvalue()
-        self.assertIn("group1", output)
-        self.assertIn("file1.txt", output)
-        self.assertIn("file2.txt", output)
-
-    @parameterized.expand([
-        ("simple_text", {"group1": ["file1.txt"]}),
-        ("unicode", {"группа": ["файл.txt", "другой.txt"]})
-    ])
-    def test_save_results_to_file(self, name, results):
-        output_file = os.path.join(self.test_dir, "results.txt")
-        save_results_to_file(results, output_file)
-        self.assertTrue(os.path.exists(output_file))
+    def test_write_duplicates_to_csv_unicode(self):
+        """
+        Корректная запись unicode-символов.
+        """
+        output_file = os.path.join(self.temp_dir, "uni.csv")
+        duplicates = {
+            "hashUni": [
+                {"path": "/tmp/файл.txt", "size": 50},
+                {"path": "/tmp/другой_файл.txt", "size": 50},
+            ]
+        }
+        result = write_duplicates_to_csv(duplicates, output_file)
+        self.assertTrue(result)
         with open(output_file, "r", encoding="utf-8") as f:
             content = f.read()
-        for key, files in results.items():
-            self.assertIn(key, content)
-            for file in files:
-                self.assertIn(file, content)
+            self.assertIn("файл.txt", content)
 
-    def test_rewrite_existing_file(self):
-        output_file = os.path.join(self.test_dir, "results.txt")
-        initial_content = "Old Content"
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(initial_content)
-        results = {"group1": ["file1.txt", "file2.txt"]}
-        save_results_to_file(results, output_file)
-        with open(output_file, "r", encoding="utf-8") as f:
-            new_content = f.read()
-        self.assertNotEqual(initial_content, new_content)
-
-    def test_large_number_of_groups(self):
-        # Генерируем много групп
-        duplicates = {f"group{i}": [f"file{i}_1.txt", f"file{i}_2.txt"] for i in range(100)}
-        output_file = os.path.join(self.test_dir, "large.csv")
-        write_duplicates_to_csv(duplicates, output_file)
-        self.assertTrue(os.path.exists(output_file))
+    def test_write_duplicates_to_csv_many_groups(self):
+        """
+        Большое количество групп => проверяем, что всё записывается без ошибок.
+        """
+        output_file = os.path.join(self.temp_dir, "many.csv")
+        duplicates = {}
+        for i in range(100):
+            hsh = f"hash{i}"
+            duplicates[hsh] = [
+                {"path": f"/path/to/file{i}_1.txt", "size": 1234},
+                {"path": f"/path/to/file{i}_2.txt", "size": 1234}
+            ]
+        result = write_duplicates_to_csv(duplicates, output_file)
+        self.assertTrue(result)
         with open(output_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        # Если реализована запись заголовка, то число строк должно быть не менее 101
-        self.assertGreaterEqual(len(lines), 100)
+            self.assertGreaterEqual(len(lines), 201)
 
-    def test_error_handling_in_save_results(self):
-        # Симулируем ошибку записи, используя директорию без прав на запись
-        no_write_dir = os.path.join(self.test_dir, "no_write")
-        os.mkdir(no_write_dir)
-        os.chmod(no_write_dir, 0o444)  # Только чтение
-        output_file = os.path.join(no_write_dir, "results.txt")
-        with self.assertRaises(Exception):
-            save_results_to_file({"group": ["file.txt"]}, output_file)
-        os.chmod(no_write_dir, 0o755)
+    def test_rewrite_csv(self):
+        """
+        Проверяем перезапись файла.
+        """
+        output_file = os.path.join(self.temp_dir, "rewrite.csv")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("OLD CONTENT")
+
+        duplicates = {
+            "hashXYZ": [
+                {"path": "/path/fileA.txt", "size": 500},
+                {"path": "/path/fileB.txt", "size": 500}
+            ]
+        }
+        result = write_duplicates_to_csv(duplicates, output_file)
+        self.assertTrue(result)
+        with open(output_file, "r", encoding="utf-8") as f:
+            new_content = f.read()
+            self.assertNotIn("OLD CONTENT", new_content)
+
+
+class TestOutputTree(unittest.TestCase):
+    def test_print_tree_view(self):
+        duplicates = {
+            "hash123": [
+                {"path": "/some/path1.txt", "size": 100},
+                {"path": "/some/path2.txt", "size": 100},
+            ]
+        }
+        # Перенаправим stdout в StringIO
+        with patch('sys.stdout', new=StringIO()) as fake_out:
+            print_tree_view(duplicates)
+            output = fake_out.getvalue()
+            self.assertIn("Группа 1:", output)
+            self.assertIn("/some/path1.txt", output)
+
+    def test_save_tree_to_txt(self):
+        duplicates = {
+            "hashUni": [
+                {"path": "/tmp/файл.txt", "size": 50},
+                {"path": "/tmp/другой.txt", "size": 50}
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "tree.txt")
+            save_tree_to_txt(duplicates, out_file)
+            self.assertTrue(os.path.exists(out_file))
+            with open(out_file, "r", encoding="utf-8") as f:
+                content = f.read()
+                self.assertIn("Группа 1:", content)
+                self.assertIn("файл.txt", content)
+
+    def test_save_tree_no_permission(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            locked_dir = os.path.join(tmp_dir, "locked")
+            os.mkdir(locked_dir)
+            os.chmod(locked_dir, 0o444)
+            out_file = os.path.join(locked_dir, "results.txt")
+
+            duplicates = {"hashX": [{"path": "/path/f.txt", "size": 100}]}
+            with self.assertRaises(Exception):
+                save_tree_to_txt(duplicates, out_file)
+
+            os.chmod(locked_dir, 0o755)
 
 
 if __name__ == "__main__":

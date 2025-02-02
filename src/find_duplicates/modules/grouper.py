@@ -1,58 +1,34 @@
 import os
-import hashlib
+from .logger import logger, log_execution
+from .utils import get_file_info
 
-""" """
 
-
-def group_files_by_hash(file_paths: list) -> dict:
-    """Группирует файлы по их хешу.
-
-    :param file_paths: Список путей файлов для группировки.
-    :type file_paths: List[str]
-    :returns: Словарь, где ключи - это хеши файлов, значения - списки файлов с этим хешем.
-    :rtype: Dict[str, List[str]]
+@log_execution(level="INFO", message="Группировка файлов по размеру")
+def group_files_by_size(file_list: list) -> dict:
     """
-    if not file_paths:
-        print("Пустой список файлов = нет хеша.")
-        return {}
-
-    hash_dict = {}
-    print("Группировка по хешу пока не реализована")
-
-    return hash_dict
-
-
-def group_files_by_size(file_list) -> dict:
-    """Группирует файлы по их размеру.
-
-    :param file_list: Список файлов для группировки.
-    :type file_list: List[str]
-    :returns: Словарь, ключи - это размер файлов в байтах, значения - списки файлов с этим размером.
+    Группирует файлы по их размеру, используя get_file_info для получения нормализованного пути и размера.
+    Возвращает словарь, где ключ — размер (в байтах), а значение — список нормализованных путей файлов.
     """
     if not file_list:
-        print("Пустой список файлов = нет размера.")
+        logger.warning("Пустой список файлов.")
         return {}
 
     size_dict = {}
-
     for file in file_list:
         try:
-            # Пропускаем директории
             if not os.path.isfile(file):
+                logger.debug(f"Пропущен недопустимый файл или директория: {file}")
                 continue
-            # Проверяем доступ к файлу перед вызовом getsize()
             if not os.access(file, os.R_OK):
-                print(f"Нет доступа к файлу {file}, пропускаем.")
+                logger.warning(f"Нет доступа к файлу {file}.")
                 continue
+            info = get_file_info(file)
+            if info['size'] is not None:
+                size_dict.setdefault(info['size'], []).append(info['path'])
+        except Exception as e:
+            logger.error(f"Ошибка обработки файла {file}: {e}")
 
-            file_size = os.path.getsize(file)
-            if file_size not in size_dict:
-                size_dict[file_size] = []
-            size_dict[file_size].append(file)
-
-        except FileNotFoundError:
-            print(f"Файл {file} не найден.")
-        except PermissionError:
-            print(f"Нет доступа к файлу {file}, пропускаем.")
-
-    return size_dict
+    # Исключаем группы с единственным файлом
+    filtered_dict = {size: files for size, files in size_dict.items() if len(files) > 1}
+    logger.info(f"Найдено {len(filtered_dict)} групп по размеру.")
+    return filtered_dict

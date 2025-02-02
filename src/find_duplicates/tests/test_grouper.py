@@ -1,222 +1,200 @@
+# Файл: tests/test_grouper.py
 import os
+import unittest
 import tempfile
 import shutil
-import unittest
 from parameterized import parameterized
 from find_duplicates.modules.grouper import group_files_by_size
 
+
+def create_file(dir_path, name, content=""):
+    """
+    Утилита для создания текстового файла.
+    Возвращает абсолютный путь к файлу.
+    """
+    full_path = os.path.join(dir_path, name)
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return os.path.abspath(full_path)
+
 class TestGrouper(unittest.TestCase):
+    """
+    Тесты для функции group_files_by_size (UnitTest стиль).
+    """
+
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
+        self.temp_dir = tempfile.mkdtemp()
+
     def tearDown(self):
-        shutil.rmtree(self.test_dir)
+        shutil.rmtree(self.temp_dir)
 
-    # 1. Группировка файлов с одинаковым и разными размерами
-    @parameterized.expand([
-        # Кейсы: два файла с одинаковым содержимым (одинаковый размер)
-        ("same_size", "Hello", "Hello"),
-        # Кейсы: два файла с разным содержимым (разные размеры)
-        ("different_size", "Hello", "World!")
-    ])
-    def test_grouping_same_and_different(self, name, content1, content2):
-        file1 = os.path.join(self.test_dir, f"file1_{name}.txt")
-        file2 = os.path.join(self.test_dir, f"file2_{name}.txt")
-        with open(file1, "w") as f:
-            f.write(content1)
-        with open(file2, "w") as f:
-            f.write(content2)
+    def test_group_same_size(self):
+        """
+        Два файла с одинаковым содержимым должны группироваться.
+        """
+        file1 = create_file(self.temp_dir, "f1.txt", "Hello")
+        file2 = create_file(self.temp_dir, "f2.txt", "Hello")
         grouped = group_files_by_size([file1, file2])
-        if content1 == content2:
-            expected_size = os.path.getsize(file1)
-            self.assertIn(expected_size, grouped)
-            self.assertEqual(len(grouped[expected_size]), 2)
-        else:
-            size1 = os.path.getsize(file1)
-            size2 = os.path.getsize(file2)
-            self.assertIn(size1, grouped)
-            self.assertIn(size2, grouped)
-            self.assertEqual(len(grouped[size1]), 1)
-            self.assertEqual(len(grouped[size2]), 1)
-
-    # 2. Передача пустого списка
-    def test_empty_list(self):
-        self.assertEqual(group_files_by_size([]), {})
-
-    # 3. Файлы, которых не существует (должны быть проигнорированы)
-    def test_nonexistent_files(self):
-        file1 = os.path.join(self.test_dir, "file.txt")
-        with open(file1, "w") as f:
-            f.write("data")
-        non_exist = os.path.join(self.test_dir, "missing.txt")
-        grouped = group_files_by_size([file1, non_exist])
         size = os.path.getsize(file1)
         self.assertIn(size, grouped)
-        self.assertEqual(grouped[size], [file1])
+        self.assertEqual(set(grouped[size]), {file1, file2})
 
-    # 4. Передача директорий вместо файлов (директории должны быть проигнорированы)
-    def test_directory_instead_of_file(self):
-        dir_path = os.path.join(self.test_dir, "subdir")
-        os.mkdir(dir_path)
-        grouped = group_files_by_size([dir_path])
+    def test_group_different_sizes(self):
+        """
+        Файлы разного размера не группируются – функция возвращает пустой словарь.
+        """
+        f1 = create_file(self.temp_dir, "a.txt", "abc")
+        f2 = create_file(self.temp_dir, "b.txt", "abcd")
+        grouped = group_files_by_size([f1, f2])
         self.assertEqual(grouped, {})
 
-    # 5. Файлы без прав доступа (должны быть проигнорированы)
-    def test_file_without_permission(self):
-        file_path = os.path.join(self.test_dir, "no_access.txt")
-        with open(file_path, "w") as f:
-            f.write("restricted")
+    def test_empty_input(self):
+        """
+        Передача пустого списка возвращает пустой словарь.
+        """
+        self.assertEqual(group_files_by_size([]), {})
+
+    def test_nonexistent_ignored(self):
+        """
+        Несуществующие файлы игнорируются; если только один файл существует, группа не формируется.
+        """
+        exist = create_file(self.temp_dir, "exists.txt", "data")
+        missing = os.path.join(self.temp_dir, "missing.txt")
+        grouped = group_files_by_size([exist, missing])
+        self.assertEqual(grouped, {})
+
+    def test_directory_ignored(self):
+        """
+        Передача директории вместо файла возвращает пустой словарь.
+        """
+        d = os.path.join(self.temp_dir, "subdir")
+        os.mkdir(d)
+        grouped = group_files_by_size([d])
+        self.assertEqual(grouped, {})
+
+    def test_no_access_file(self):
+        """
+        Файл без прав доступа не учитывается.
+        """
+        file_path = create_file(self.temp_dir, "restricted.txt", "secret")
         os.chmod(file_path, 0o000)
         grouped = group_files_by_size([file_path])
         self.assertEqual(grouped, {})
         os.chmod(file_path, 0o644)
 
-    # 6. Группировка бинарных файлов
-    def test_grouping_binary_file(self):
-        file_path = os.path.join(self.test_dir, "binary.bin")
-        data = os.urandom(256)
-        with open(file_path, "wb") as f:
-            f.write(data)
-        grouped = group_files_by_size([file_path])
-        size = os.path.getsize(file_path)
+    def test_zero_size_file(self):
+        """
+        Файл размера 0 байт. Если только один файл, группа не формируется.
+        """
+        empty_file = create_file(self.temp_dir, "empty.txt", "")
+        grouped = group_files_by_size([empty_file])
+        self.assertEqual(grouped, {})
+
+    def test_mixed_sizes(self):
+        """
+        Смешанный список: если несколько файлов имеют одинаковый размер, группа формируется.
+        Если файл уникален по размеру, группа не создается.
+        """
+        a = create_file(self.temp_dir, "a.txt", "hello")
+        b = create_file(self.temp_dir, "b.txt", "hello")
+        c = create_file(self.temp_dir, "c.txt", "world!!!")
+        grouped = group_files_by_size([a, b, c])
+        size_hello = os.path.getsize(a)
+        size_world = os.path.getsize(c)
+        self.assertIn(size_hello, grouped)
+        self.assertEqual(len(grouped[size_hello]), 2)
+        self.assertNotIn(size_world, grouped)
+
+    def test_same_size_in_different_dirs(self):
+        """
+        Файлы с одинаковым содержимым, но в разных директориях, должны группироваться.
+        """
+        d1 = os.path.join(self.temp_dir, "d1")
+        d2 = os.path.join(self.temp_dir, "d2")
+        os.mkdir(d1)
+        os.mkdir(d2)
+        f1 = create_file(d1, "file.txt", "data")
+        f2 = create_file(d2, "file.txt", "data")
+        grouped = group_files_by_size([f1, f2])
+        size = os.path.getsize(f1)
         self.assertIn(size, grouped)
-        self.assertEqual(grouped[size], [file_path])
+        self.assertEqual(set(grouped[size]), {f1, f2})
 
-    # 7. Группировка текстовых файлов
-    def test_grouping_text_file(self):
-        file_path = os.path.join(self.test_dir, "text.txt")
-        content = "Some text data"
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        grouped = group_files_by_size([file_path])
-        size = os.path.getsize(file_path)
-        self.assertIn(size, grouped)
-        self.assertEqual(grouped[size], [file_path])
-
-    # 8. Файлы размера 0
-    def test_file_size_zero(self):
-        file_path = os.path.join(self.test_dir, "empty.txt")
-        open(file_path, "w").close()
-        grouped = group_files_by_size([file_path])
-        self.assertIn(0, grouped)
-        self.assertEqual(grouped[0], [file_path])
-
-    # 9. Смешанный список файлов (одни файлы с одинаковым размером, другие – нет)
-    def test_mixed_list(self):
-        file1 = os.path.join(self.test_dir, "a.txt")
-        file2 = os.path.join(self.test_dir, "b.txt")
-        file3 = os.path.join(self.test_dir, "c.txt")
-        with open(file1, "w") as f:
-            f.write("same")
-        with open(file2, "w") as f:
-            f.write("same")
-        with open(file3, "w") as f:
-            f.write("different")
-        grouped = group_files_by_size([file1, file2, file3])
-        size_same = os.path.getsize(file1)
-        size_diff = os.path.getsize(file3)
-        self.assertIn(size_same, grouped)
-        self.assertEqual(len(grouped[size_same]), 2)
-        self.assertIn(size_diff, grouped)
-        self.assertEqual(len(grouped[size_diff]), 1)
-
-    # 10. Файлы с одинаковым размером, но в разных директориях
-    def test_same_size_different_directories(self):
-        subdir1 = os.path.join(self.test_dir, "dir1")
-        subdir2 = os.path.join(self.test_dir, "dir2")
-        os.mkdir(subdir1)
-        os.mkdir(subdir2)
-        file1 = os.path.join(subdir1, "file.txt")
-        file2 = os.path.join(subdir2, "file.txt")
-        content = "identical"
-        with open(file1, "w") as f:
-            f.write(content)
-        with open(file2, "w") as f:
-            f.write(content)
-        grouped = group_files_by_size([file1, file2])
-        size = os.path.getsize(file1)
-        self.assertIn(size, grouped)
-        self.assertEqual(set(grouped[size]), {file1, file2})
-
-    # 11. Файлы с non‑ASCII именами
     def test_nonascii_filenames(self):
-        file_path = os.path.join(self.test_dir, "файл.txt")
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write("data")
-        grouped = group_files_by_size([file_path])
-        size = os.path.getsize(file_path)
-        self.assertIn(size, grouped)
-        self.assertEqual(grouped[size], [file_path])
+        """
+        Файл с non‑ASCII именем – если только один, группа не формируется.
+        """
+        f = create_file(self.temp_dir, "файл.txt", "unicode data")
+        grouped = group_files_by_size([f])
+        self.assertEqual(grouped, {})
 
-    # 12. Файлы с пробелами в имени
     def test_spaces_in_filename(self):
-        file_path = os.path.join(self.test_dir, "file with spaces.txt")
-        with open(file_path, "w") as f:
-            f.write("content")
-        grouped = group_files_by_size([file_path])
-        size = os.path.getsize(file_path)
-        self.assertIn(size, grouped)
-        self.assertEqual(grouped[size], [file_path])
+        """
+        Файл с пробелами в имени – если только один, группа не формируется.
+        """
+        f = create_file(self.temp_dir, "my file.txt", "some data")
+        grouped = group_files_by_size([f])
+        self.assertEqual(grouped, {})
 
-    # 13. Большое число файлов (проверка масштабируемости)
-    def test_large_number_of_files(self):
-        num_files = 50  # для демонстрации; можно увеличить
-        file_paths = []
-        for i in range(num_files):
-            path = os.path.join(self.test_dir, f"file_{i}.txt")
-            with open(path, "w") as f:
-                f.write("scalable")
-            file_paths.append(path)
-        grouped = group_files_by_size(file_paths)
-        size = os.path.getsize(file_paths[0])
+    @parameterized.expand([
+        ("small_count", 100),
+        ("bigger_test", 150),
+    ])
+    def test_large_number_of_files(self, name, count):
+        """
+        Масштабируемость: создаём большое число файлов с одинаковым содержимым.
+        """
+        files = []
+        for i in range(count):
+            f = create_file(self.temp_dir, f"file_{i}.txt", "same content")
+            files.append(f)
+        grouped = group_files_by_size(files)
+        size = os.path.getsize(files[0])
         self.assertIn(size, grouped)
-        self.assertEqual(len(grouped[size]), num_files)
+        self.assertEqual(len(grouped[size]), count)
 
-    # 14. Файлы-симлинки (если обрабатываются)
-    def test_file_symlink(self):
-        if not hasattr(os, "symlink"):
-            self.skipTest("Симлинки не поддерживаются")
-        target = os.path.join(self.test_dir, "target.txt")
-        with open(target, "w") as f:
-            f.write("symlink test")
-        symlink_path = os.path.join(self.test_dir, "link.txt")
-        os.symlink(target, symlink_path)
-        grouped = group_files_by_size([target, symlink_path])
+    @unittest.skipIf(not hasattr(os, "symlink"), "Symlinks not supported")
+    def test_symlink_handling(self):
+        """
+        Проверяем обработку симлинков.
+        """
+        target = create_file(self.temp_dir, "target.txt", "symlink test")
+        # Удаляем существующий файл для создания симлинка
+        link = os.path.join(self.temp_dir, "link.txt")
+        if os.path.exists(link):
+            os.remove(link)
+        os.symlink(target, link)
+        grouped = group_files_by_size([target, link])
         size = os.path.getsize(target)
         self.assertIn(size, grouped)
-        self.assertEqual(set(grouped[size]), {target, symlink_path})
+        self.assertEqual(set(grouped[size]), {target, link})
 
-    # 15. Повторяющиеся имена в разных папках
-    def test_duplicate_names_in_different_folders(self):
-        dir1 = os.path.join(self.test_dir, "d1")
-        dir2 = os.path.join(self.test_dir, "d2")
-        os.mkdir(dir1)
-        os.mkdir(dir2)
-        file_name = "common.txt"
-        file1 = os.path.join(dir1, file_name)
-        file2 = os.path.join(dir2, file_name)
-        with open(file1, "w") as f:
-            f.write("duplicate")
-        with open(file2, "w") as f:
-            f.write("duplicate")
-        grouped = group_files_by_size([file1, file2])
-        size = os.path.getsize(file1)
+    def test_duplicate_names_in_diff_folders(self):
+        """
+        Файлы с одинаковым именем в разных папках с одинаковым содержимым должны группироваться.
+        """
+        d1 = os.path.join(self.temp_dir, "folder1")
+        d2 = os.path.join(self.temp_dir, "folder2")
+        os.mkdir(d1)
+        os.mkdir(d2)
+        f1 = create_file(d1, "common.txt", "duplicate")
+        f2 = create_file(d2, "common.txt", "duplicate")
+        grouped = group_files_by_size([f1, f2])
+        size = os.path.getsize(f1)
         self.assertIn(size, grouped)
-        self.assertEqual(set(grouped[size]), {file1, file2})
+        self.assertEqual(set(grouped[size]), {f1, f2})
 
-    # 16. Проверка, что функция возвращает словарь и корректность типов ключей и значений
-    def test_return_type_and_key_value_types(self):
-        file1 = os.path.join(self.test_dir, "a.txt")
-        file2 = os.path.join(self.test_dir, "b.txt")
-        with open(file1, "w") as f:
-            f.write("content")
-        with open(file2, "w") as f:
-            f.write("different")
-        grouped = group_files_by_size([file1, file2])
+    def test_return_type_and_keys(self):
+        """
+        Проверяем, что функция возвращает словарь, где ключи — int, а значения — список строк.
+        """
+        f = create_file(self.temp_dir, "check.txt", "content")
+        grouped = group_files_by_size([f])
         self.assertIsInstance(grouped, dict)
-        for key, value in grouped.items():
+        for key, val in grouped.items():
             self.assertIsInstance(key, int)
-            self.assertIsInstance(value, list)
-            for item in value:
+            self.assertIsInstance(val, list)
+            for item in val:
                 self.assertIsInstance(item, str)
 
 if __name__ == "__main__":

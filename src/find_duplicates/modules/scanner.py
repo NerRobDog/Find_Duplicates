@@ -1,103 +1,88 @@
 import os
-from os import walk, path
 from fnmatch import fnmatch
-import tempfile
-
-"""
-walk возвращает список всех файлов и директорий в заданной директории
-path возвращает абсолютный путь к файлу или директории
-fnmatch используется для сравнения строк с шаблонами
-"""
+from .logger import logger, log_execution
 
 
-# Проверяем, поддерживает ли система символические ссылки
-def check_symlink_support():
-    with tempfile.TemporaryDirectory() as temp_dir:
-        test_link = path.join(temp_dir, "test_symlink")
-        test_target = path.join(temp_dir, "test_target")
-        try:
-            os.symlink(test_target, test_link)
-            return True
-        except (OSError, AttributeError, NotImplementedError):
-            return False
-
-
-symlink_supported = check_symlink_support()
-
-
-def scan_directory(directory, exclude=None, include_hidden=False, follow_symlinks=False) -> list:
+@log_execution(level="DEBUG", message="Сканирование директории")
+def scan_directory(directory, include_hidden=False, skip_inaccessible=False, exclude=None) -> list:
     """
     Обходит директорию рекурсивно и возвращает список файлов.
 
     :param directory: Путь к директории для обхода.
     :type directory: Str
-    :param exclude: Список паттернов для исключения файлов и директорий.
-    :type exclude: List, optional
     :param include_hidden: Включать скрытые файлы в результат.
-    :type include_hidden: Bool, optional
-    :param follow_symlinks: Следовать ли за символическими ссылками (по умолчанию False).
-    :type follow_symlinks: Bool, optional
-    :return: Список файлов в указанной директории.
-    :rtype: List
+    :type include_hidden: Bool
+    :param skip_inaccessible: Пропускать файлы и папки без доступа.
+    :type skip_inaccessible: Bool
+    :param exclude: Список регулярных выражений для исключения файлов.
+    :type exclude: List[str]
+    :return: Список файлов.
+    :rtype: List[str]
     """
-    if exclude is None:
-        exclude = []
-
     file_list = []
+    exclude = exclude or []
 
-    # Проверяем, что путь является директорией
-    if not os.path.isdir(directory):
-        raise OSError(f"{directory} is not a directory")
+    def scan(dir_path):
+        try:
+            with os.scandir(dir_path) as entries:
+                for entry in entries:
+                    # 1) Скрытые файлы, если include_hidden=False, пропускаем
+                    if not include_hidden and entry.name.startswith('.'):
+                        continue
 
-    # Делаем путь абсолютным
-    base_directory = path.abspath(directory)
+                    # 2) Проверяем, не указано ли имя (директории или файла) в exclude
+                    if is_excluded(entry.path, exclude):
+                        logger.debug(f"'{entry.path}/{entry.name}' исключён по шаблонам")
+                        continue
+                    if is_excluded(entry.name, exclude):
+                        logger.debug(f"'{entry.name}' исключён по шаблонам")
+                        continue
 
-    for root, dirs, files in walk(directory, followlinks=follow_symlinks if symlink_supported else False):
-        # Фильтруем скрытые директории и файлы если include_hidden=False
-        if not include_hidden:
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
-            files[:] = [f for f in files if not f.startswith('.')]
+                    # 3) Проверка доступа
+                    if not os.access(entry.path, os.R_OK):
+                        msg = f"Нет доступа к {'директории' if entry.is_dir(follow_symlinks=False) else 'файлу'}: {entry.path}"
+                        if skip_inaccessible:
+                            logger.warning(msg + " — пропускаем.")
+                            continue
+                        else:
+                            raise PermissionError(msg)
 
-        # Обрабатываем файлы
-        for name in files:
-            full_path = path.join(root, name)
+                    # 4) Если это директория, рекурсивно заходим в неё
+                    if entry.is_dir(follow_symlinks=False):
+                        scan(entry.path)
+                    # 5) Если это файл — добавляем в список
+                    elif entry.is_file(follow_symlinks=False):
+                        file_list.append(entry.path)
 
-            # Проверяем доступность файла
-            if not os.access(full_path, os.R_OK):  # Если нет прав на чтение, исключаем файл
-                continue
+        except (PermissionError, FileNotFoundError) as e:
+            # При skip_inaccessible=True пропускаем
+            # иначе выбрасываем, завершая программу
+            if skip_inaccessible:
+                logger.warning(f"Пропуск недоступного элемента: {e}")
+            else:
+                logger.error(f"Ошибка доступа: {e}")
+                raise
 
-            # Проверяем, является ли это символической ссылкой
-            if os.path.islink(full_path):
-                if not follow_symlinks:
-                    continue  # Пропускаем симлинк, если follow_symlinks=False
-                if not symlink_supported:
-                    continue  # Пропускаем, если система не поддерживает симлинки
-
-            # Получаем относительный путь от базовой директории
-            relative_path = path.relpath(full_path, base_directory)
-            if not is_excluded(relative_path, exclude):
-                file_list.append(relative_path)  # Добавляем файл в список
-
-        # Обработка директорий с правами только для чтения
-        for dir_name in dirs:
-            full_dir_path = path.join(root, dir_name)
-            if not os.access(full_dir_path, os.R_OK):  # Если нет прав на чтение для директории
-                continue
-
-            # Проверяем, является ли это символической ссылкой на директорию
-            if os.path.islink(full_dir_path):
-                if not follow_symlinks:
-                    continue  # Пропускаем симлинк, если follow_symlinks=False
-                if not symlink_supported:
-                    continue  # Пропускаем, если система не поддерживает симлинки
-
+    scan(directory)
     return file_list
 
 
-def is_excluded(filepath, exclude_patterns):
-    # Проверяем, содержится ли путь в списке исключений
-    if exclude_patterns:
-        for pattern in exclude_patterns:
-            if fnmatch(filepath, pattern):
-                return True
+@log_execution(level="DEBUG", message="Проверка исключений для файлов и директорий")
+def is_excluded(name: str, exclude_patterns: list) -> bool:
+    """
+    Проверяет, соответствует ли имя файла или директории одному из шаблонов.
+    Для директорий можно использовать шаблоны с префиксом 'dir:'.
+
+    :param name: Путь к файлу или директории.
+    :type name: Str
+    :param exclude_patterns: Список паттернов для исключения.
+    :type exclude_patterns: List
+    :return: True, если файл должен быть исключён, иначе False.
+    :rtype: Bool
+    """
+    for pattern in exclude_patterns:
+        # Используем fnmatch, чтобы проверять соответствие имени и паттерна
+        if fnmatch(name, pattern):
+            logger.debug(f"Имя '{name}' исключается по шаблону '{pattern}'")
+            return True
     return False

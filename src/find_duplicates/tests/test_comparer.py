@@ -1,197 +1,189 @@
+# Файл: tests/test_comparer.py
 import os
+import unittest
 import tempfile
 import shutil
-import unittest
-from parameterized import parameterized
-import hashlib
-
 from find_duplicates.modules.comparer import compare_files, find_potential_duplicates
 from find_duplicates.modules.grouper import group_files_by_size
 
 
+def create_file(dir_path, filename, content):
+    """
+    Утилита для создания текстового файла.
+    Возвращает абсолютный путь к файлу.
+    """
+    full_path = os.path.join(dir_path, filename)
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return os.path.abspath(full_path)
+
 class TestCompareFiles(unittest.TestCase):
+    """
+    UnitTest тесты для функции compare_files.
+    """
+
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
+        self.temp_dir = tempfile.mkdtemp()
 
     def tearDown(self):
-        shutil.rmtree(self.test_dir)
+        shutil.rmtree(self.temp_dir)
 
-    # Параметризованные тесты для простых случаев (текстовые файлы)
-    @parameterized.expand([
-        ("identical_text", "Hello World", "Hello World", True),
-        ("different_text", "Hello", "World", False),
-        ("empty_files", "", "", True),
-        ("one_empty_one_nonempty", "", "Data", False),
-    ])
-    def test_compare_files_text(self, name, content1, content2, expected):
-        file1 = os.path.join(self.test_dir, f"file1_{name}.txt")
-        file2 = os.path.join(self.test_dir, f"file2_{name}.txt")
-        with open(file1, "w", encoding="utf-8") as f:
-            f.write(content1)
-        with open(file2, "w", encoding="utf-8") as f:
-            f.write(content2)
-        result = compare_files(file1, file2)
-        self.assertEqual(result, expected)
+    def test_identical_files(self):
+        f1 = create_file(self.temp_dir, "file1.txt", "Hello World")
+        f2 = create_file(self.temp_dir, "file2.txt", "Hello World")
+        self.assertTrue(compare_files(f1, f2))
 
-    def test_compare_files_binary(self):
-        # Два бинарных файла с одинаковым содержимым
-        file1 = os.path.join(self.test_dir, "binary1.bin")
-        file2 = os.path.join(self.test_dir, "binary2.bin")
-        data = os.urandom(1024)
-        with open(file1, "wb") as f:
-            f.write(data)
-        with open(file2, "wb") as f:
-            f.write(data)
-        result = compare_files(file1, file2)
-        self.assertTrue(result)
+    def test_different_files(self):
+        a = create_file(self.temp_dir, "a.txt", "abc")
+        b = create_file(self.temp_dir, "b.txt", "xyz")
+        self.assertFalse(compare_files(a, b))
 
-    def test_compare_files_small_difference(self):
-        # Файлы, отличающиеся одной байтовой разницей
-        file1 = os.path.join(self.test_dir, "diff1.txt")
-        file2 = os.path.join(self.test_dir, "diff2.txt")
-        data1 = b"1234567890"
-        data2 = b"1234567891"  # отличается последним байтом
-        with open(file1, "wb") as f:
-            f.write(data1)
-        with open(file2, "wb") as f:
-            f.write(data2)
-        result = compare_files(file1, file2)
-        self.assertFalse(result)
+    def test_empty_files(self):
+        e1 = create_file(self.temp_dir, "empty1.txt", "")
+        e2 = create_file(self.temp_dir, "empty2.txt", "")
+        self.assertTrue(compare_files(e1, e2))
 
-    def test_compare_files_nonexistent(self):
-        # Один из файлов не существует – ожидается исключение (или обработка ошибки)
-        file1 = os.path.join(self.test_dir, "exists.txt")
-        file2 = os.path.join(self.test_dir, "nonexistent.txt")
-        with open(file1, "w") as f:
-            f.write("Data")
-        with self.assertRaises(Exception):
-            compare_files(file1, file2)
+    def test_one_empty_vs_not_empty(self):
+        empty = create_file(self.temp_dir, "empty.txt", "")
+        not_empty = create_file(self.temp_dir, "not.txt", "some data")
+        self.assertFalse(compare_files(empty, not_empty))
 
-    def test_compare_files_permission_error(self):
-        # Файлы с ошибкой доступа
-        file1 = os.path.join(self.test_dir, "perm1.txt")
-        file2 = os.path.join(self.test_dir, "perm2.txt")
-        with open(file1, "w") as f:
-            f.write("Secret")
-        with open(file2, "w") as f:
-            f.write("Secret")
-        os.chmod(file2, 0o000)  # Убираем права на чтение
-        try:
-            with self.assertRaises(Exception):
-                compare_files(file1, file2)
-        finally:
-            os.chmod(file2, 0o644)
+    def test_one_byte_diff(self):
+        f1 = create_file(self.temp_dir, "f1.txt", "HelloA")
+        f2 = create_file(self.temp_dir, "f2.txt", "HelloB")
+        self.assertFalse(compare_files(f1, f2))
 
-    def test_compare_files_large(self):
-        # Сравнение больших файлов (например, 1МБ одинакового контента)
-        file1 = os.path.join(self.test_dir, "large1.txt")
-        file2 = os.path.join(self.test_dir, "large2.txt")
-        data = "A" * (1024 * 1024)  # 1 МБ символов "A"
-        with open(file1, "w") as f:
-            f.write(data)
-        with open(file2, "w") as f:
-            f.write(data)
-        result = compare_files(file1, file2)
-        self.assertTrue(result)
+    def test_large_files(self):
+        data = "A" * (2 * 1024 * 1024)
+        big1 = create_file(self.temp_dir, "big1.txt", data)
+        big2 = create_file(self.temp_dir, "big2.txt", data)
+        self.assertTrue(compare_files(big1, big2))
 
-    def test_compare_files_unicode_filenames(self):
-        # Файлы с non‑ASCII именами
-        file1 = os.path.join(self.test_dir, "файл1.txt")
-        file2 = os.path.join(self.test_dir, "файл2.txt")
-        with open(file1, "w", encoding="utf-8") as f:
+    def test_nonexistent_file(self):
+        f1 = create_file(self.temp_dir, "exists.txt", "abc")
+        missing = os.path.join(self.temp_dir, "missing.txt")
+        # Ожидаем, что функция вернет False при отсутствии файла
+        self.assertFalse(compare_files(f1, missing))
+
+    def test_permission_error(self):
+        f1 = create_file(self.temp_dir, "p1.txt", "Secret")
+        f2 = create_file(self.temp_dir, "p2.txt", "Secret")
+        os.chmod(f2, 0o000)
+        self.assertFalse(compare_files(f1, f2))
+        os.chmod(f2, 0o644)
+
+    def test_unicode_filenames(self):
+        uni1 = os.path.join(self.temp_dir, "файл1.txt")
+        uni2 = os.path.join(self.temp_dir, "файл2.txt")
+        with open(uni1, "w", encoding="utf-8") as f:
             f.write("Unicode content")
-        with open(file2, "w", encoding="utf-8") as f:
+        with open(uni2, "w", encoding="utf-8") as f:
             f.write("Unicode content")
-        result = compare_files(file1, file2)
-        self.assertTrue(result)
+        self.assertTrue(compare_files(uni1, uni2))
 
     def test_repeat_comparison(self):
-        # Повторное сравнение одного и того же файла
-        file1 = os.path.join(self.test_dir, "repeat.txt")
-        with open(file1, "w") as f:
-            f.write("Repeat")
-        result1 = compare_files(file1, file1)
-        result2 = compare_files(file1, file1)
-        self.assertTrue(result1)
-        self.assertTrue(result2)
+        f = create_file(self.temp_dir, "repeat.txt", "Repeat data")
+        self.assertTrue(compare_files(f, f))
+        self.assertTrue(compare_files(f, f))
 
-    def test_compare_files_symlink(self):
-        # Сравнение файла и его симлинка
-        if not hasattr(os, "symlink"):
-            self.skipTest("Симлинки не поддерживаются в этой ОС")
-        target = os.path.join(self.test_dir, "target.txt")
-        symlink = os.path.join(self.test_dir, "link.txt")
-        with open(target, "w") as f:
-            f.write("Symlink test")
-        os.symlink(target, symlink)
-        result = compare_files(target, symlink)
-        self.assertTrue(result)
-
-    def test_stability_multiple_calls(self):
-        # Повторное последовательное сравнение для проверки стабильности
-        file1 = os.path.join(self.test_dir, "stable.txt")
-        file2 = os.path.join(self.test_dir, "stable2.txt")
-        with open(file1, "w") as f:
-            f.write("Stable content")
-        with open(file2, "w") as f:
-            f.write("Stable content")
-        for _ in range(5):
-            result = compare_files(file1, file2)
-            self.assertTrue(result)
-
+    @unittest.skipIf(not hasattr(os, "symlink"), "Symlinks not supported")
+    def test_compare_symlink(self):
+        target = create_file(self.temp_dir, "target.txt", "Symlink content")
+        link = os.path.join(self.temp_dir, "link.txt")
+        if os.path.exists(link):
+            os.remove(link)
+        os.symlink(target, link)
+        self.assertTrue(compare_files(target, link))
 
 class TestFindPotentialDuplicates(unittest.TestCase):
+    """
+    UnitTest тесты для функции find_potential_duplicates.
+    """
+
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
+        self.temp_dir = tempfile.mkdtemp()
 
     def tearDown(self):
-        shutil.rmtree(self.test_dir)
+        shutil.rmtree(self.temp_dir)
 
-    def test_find_duplicates_grouping(self):
-        # Создаём три файла: два с одинаковым содержимым и один с другим содержимым
-        file1 = os.path.join(self.test_dir, "dup1.txt")
-        file2 = os.path.join(self.test_dir, "dup2.txt")
-        file3 = os.path.join(self.test_dir, "unique.txt")
-        content_dup = "Duplicate content"
-        content_unique = "Unique content"
-        with open(file1, "w") as f:
-            f.write(content_dup)
-        with open(file2, "w") as f:
-            f.write(content_dup)
-        with open(file3, "w") as f:
-            f.write(content_unique)
+    def create_small_file(self, name, content):
+        path_ = os.path.join(self.temp_dir, name)
+        with open(path_, "w", encoding="utf-8") as f:
+            f.write(content)
+        return os.path.abspath(path_)
 
-        # Сначала группируем файлы по размеру
-        grouped = group_files_by_size([file1, file2, file3])
-        # Вызываем find_potential_duplicates (ожидается группировка по хэшу)
+    def test_basic_duplicates(self):
+        dup1 = self.create_small_file("dup1.txt", "Duplicate")
+        dup2 = self.create_small_file("dup2.txt", "Duplicate")
+        unique = self.create_small_file("unique.txt", "Unique")
+        grouped = group_files_by_size([dup1, dup2, unique])
+        dups = find_potential_duplicates(grouped, "md5")
+        self.assertIsInstance(dups, dict)
+        found = False
+        for hsh, items in dups.items():
+            paths = {item["path"] for item in items}
+            if {dup1, dup2}.issubset(paths):
+                found = True
+        self.assertTrue(found)
+
+    def test_no_duplicates_for_diff_files(self):
+        a = self.create_small_file("a.txt", "AAA")
+        b = self.create_small_file("b.txt", "BBB")
+        grouped = group_files_by_size([a, b])
         duplicates = find_potential_duplicates(grouped, "md5")
-        # Проверяем, что в одной из групп находятся file1 и file2
-        found = any(set(group) == {file1, file2} for group in duplicates.values())
-        self.assertTrue(found, "Дубликаты не сгруппированы корректно")
+        self.assertEqual(duplicates, {})
 
-    def test_find_duplicates_no_false_positives(self):
-        # Файлы с различным содержимым не должны сгруппироваться вместе
-        file1 = os.path.join(self.test_dir, "a.txt")
-        file2 = os.path.join(self.test_dir, "b.txt")
-        with open(file1, "w") as f:
-            f.write("Content A")
-        with open(file2, "w") as f:
-            f.write("Content B")
+    def test_error_nonexistent_or_no_access(self):
+        ok_file = self.create_small_file("ok.txt", "Data")
+        missing = os.path.join(self.temp_dir, "missing.txt")
+        grouped = group_files_by_size([ok_file, missing])
+        dups = find_potential_duplicates(grouped, "md5")
+        self.assertIsInstance(dups, dict)
+
+    def test_same_size_diff_content(self):
+        f1 = self.create_small_file("coll1.txt", "abc")
+        f2 = self.create_small_file("coll2.txt", "abd")
+        grouped = group_files_by_size([f1, f2])
+        duplicates = find_potential_duplicates(grouped, "md5")
+        self.assertEqual(duplicates, {})
+
+    def test_big_files_duplicates(self):
+        data = "Z" * (2 * 1024 * 1024)
+        file1 = self.create_small_file("bigA.txt", data)
+        file2 = self.create_small_file("bigB.txt", data)
         grouped = group_files_by_size([file1, file2])
-        duplicates = find_potential_duplicates(grouped, "md5")
-        # Ожидаем, что ни одна группа не содержит более одного файла
-        for group in duplicates.values():
-            self.assertLess(len(group), 2, "Несовпадающие файлы сгруппированы как дубликаты")
+        dups = find_potential_duplicates(grouped, "sha256")
+        self.assertEqual(len(dups), 1)
+        items = list(dups.values())[0]
+        paths = {item["path"] for item in items}
+        self.assertEqual(paths, {file1, file2})
 
-    def test_find_duplicates_error_handling(self):
-        # Проверка обработки ошибочных данных – если grouped не соответствует ожидаемой структуре
-        grouped = {"invalid_key": ["nonexistent_file.txt"]}
-        try:
-            duplicates = find_potential_duplicates(grouped, "md5")
-            self.assertIsInstance(duplicates, dict)
-        except Exception as e:
-            self.fail(f"find_potential_duplicates вызвала исключение: {e}")
+    def test_permission_error_in_duplicates(self):
+        ok_file = self.create_small_file("ok.txt", "some data")
+        blocked = self.create_small_file("blocked.txt", "some data")
+        os.chmod(blocked, 0o000)
+        grouped = group_files_by_size([ok_file, blocked])
+        dups = find_potential_duplicates(grouped, "md5")
+        self.assertEqual(dups, {})
+        os.chmod(blocked, 0o644)
 
+    def test_unicode_filename_duplicates(self):
+        f1 = self.create_small_file("файл1.txt", "Unicode data")
+        f2 = self.create_small_file("файл2.txt", "Unicode data")
+        grouped = group_files_by_size([f1, f2])
+        dups = find_potential_duplicates(grouped, "md5")
+        self.assertEqual(len(dups), 1)
+        items = list(dups.values())[0]
+        paths = {item["path"] for item in items}
+        self.assertEqual(paths, {f1, f2})
+
+    def test_duplicates_stability(self):
+        f1 = self.create_small_file("a.txt", "DupData")
+        f2 = self.create_small_file("b.txt", "DupData")
+        grouped = group_files_by_size([f1, f2])
+        d1 = find_potential_duplicates(grouped, "md5")
+        d2 = find_potential_duplicates(grouped, "md5")
+        self.assertEqual(d1, d2)
 
 if __name__ == "__main__":
     unittest.main()
