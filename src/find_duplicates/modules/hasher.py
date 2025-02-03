@@ -31,6 +31,7 @@ def compute_hash(filepath, hash_type='blake3', chunk_size=4 * 1024 * 1024):
         else:
             hash_func = hashlib.new(hash_type)
 
+        logger.debug(f"Чтение файла '{filepath}' для вычисления хэша")
         with open(filepath, 'rb') as f:
             for chunk in iter(lambda: f.read(chunk_size), b''):
                 hash_func.update(chunk)
@@ -39,13 +40,13 @@ def compute_hash(filepath, hash_type='blake3', chunk_size=4 * 1024 * 1024):
 
     except FileNotFoundError:
         logger.warning(f"Ошибка доступа к файлу '{filepath}': Файл не найден")
-        return "Error: File not found"  # <-- вместо None
+        return "Error: File not found"
     except PermissionError:
         logger.warning(f"Ошибка доступа к файлу '{filepath}': Permission denied")
-        return "Error: Permission denied"  # <-- вместо None
+        return "Error: Permission denied"
     except Exception as e:
         logger.error(f"Неизвестная ошибка при хэшировании '{filepath}': {e}")
-        return f"Error: {str(e)}"  # <-- вместо None
+        return f"Error: {str(e)}"
 
 
 @log_execution(level="DEBUG", message="Параллельное хэширование файлов")
@@ -68,6 +69,7 @@ def compute_hash_parallel(filepaths, hash_type='blake3', num_workers=None):
         future_to_file = {executor.submit(compute_hash, filepath, hash_type): filepath for filepath in filepaths}
 
         for future in as_completed(future_to_file):
+            logger.debug(f"Файл {future_to_file[future]} обрабатывается")
             filepath = future_to_file[future]
             try:
                 result = future.result()

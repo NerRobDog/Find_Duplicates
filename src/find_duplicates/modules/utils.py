@@ -97,7 +97,7 @@ def parse_arguments():
         description="Поиск дубликатов файлов с гибкими настройками.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("--directory", required=True, help="Директория для сканирования")
+    parser.add_argument("--directory", nargs="+", required=True, help="Директории для сканирования")
     parser.add_argument("--exclude", nargs="*", default=[], help="Шаблоны для исключения файлов/директорий")
     parser.add_argument("--hash-type", default="blake3", choices=["md5", "sha1", "sha256", "sha512", "blake3"],
                         help="Алгоритм хэширования (по умолчанию Blake3)")
@@ -108,6 +108,15 @@ def parse_arguments():
                         help="Пропускать файлы и директории, к которым нет доступа")
     parser.add_argument("--include-hidden", action="store_true",
                         help="Включать скрытые файлы при сканировании")
+    # Новые флаги:
+    parser.add_argument("--parallel", action="store_true",
+                        help="Использовать параллельную обработку для вычисления хэшей")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Количество процессов для параллельной обработки (по умолчанию os.cpu_count())")
+    parser.add_argument("--disable-hash-check", action="store_true",
+                        help="Отключить этап вычисления и проверки хэша")
+    parser.add_argument("--disable-byte-compare", action="store_true",
+                        help="Отключить этап побайтового сравнения файлов")
 
     args = parser.parse_args()
     logger.debug(f"Аргументы успешно распознаны: {args}")
@@ -134,6 +143,6 @@ def human_readable_size(size_in_bytes):
     while size_in_bytes >= 1024 and index < len(units) - 1:
         size_in_bytes /= 1024
         index += 1
-    readable_size = f"{size_in_bytes:.2f}{units[index]}"
+    readable_size = f"{size_in_bytes:.2f} {units[index]}"
     logger.debug(f"Преобразованный размер: {readable_size} для исходного размера {size_in_bytes} байт")
     return readable_size
