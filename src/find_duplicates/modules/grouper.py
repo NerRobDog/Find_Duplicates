@@ -1,4 +1,7 @@
 import os
+
+from tqdm import tqdm
+
 from .logger import logger, log_execution
 from .utils import get_file_info
 
@@ -14,7 +17,8 @@ def group_files_by_size(file_list: list) -> dict:
         return {}
 
     size_dict = {}
-    for file in file_list:
+    # Оборачиваем итерацию по файлам в tqdm для вывода progress bar в консоль
+    for file in tqdm(file_list, desc="Группировка файлов по размеру"):
         try:
             if not os.path.isfile(file):
                 logger.debug(f"Пропущен недопустимый файл или директория: {file}")
@@ -28,7 +32,6 @@ def group_files_by_size(file_list: list) -> dict:
         except Exception as e:
             logger.error(f"Ошибка обработки файла {file}: {e}")
 
-    # Исключаем группы с единственным файлом
     filtered_dict = {size: files for size, files in size_dict.items() if len(files) > 1}
-    logger.info(f"Найдено {len(filtered_dict)} групп по размеру.")
+    # logger.info(f"Найдено {len(filtered_dict)} групп по размеру.")
     return filtered_dict

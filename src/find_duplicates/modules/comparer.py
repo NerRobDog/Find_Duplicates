@@ -1,5 +1,7 @@
 import logging
 
+from tqdm import tqdm
+
 from .hasher import compute_hash
 from .utils import get_file_info
 from .logger import logger, log_execution
@@ -8,7 +10,9 @@ from .logger import logger, log_execution
 @log_execution(level="DEBUG", message="Побайтовое сравнение двух файлов")
 def compare_files(file1, file2, chunk_size=4 * 1024 * 1024):
     try:
-        with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+        total_size = get_file_info(file1)['size']
+        with open(file1, 'rb') as f1, open(file2, 'rb') as f2, tqdm(total=total_size, unit='B', unit_scale=True,
+                                                                    desc="Сравнение файлов") as pbar:
             logging.info(f"Сравниваем файлы '{file1}' и '{file2}'")
             while True:
                 chunk1 = f1.read(chunk_size)
@@ -17,6 +21,7 @@ def compare_files(file1, file2, chunk_size=4 * 1024 * 1024):
                     return True
                 if chunk1 != chunk2:
                     return False
+                pbar.update(len(chunk1))
     except Exception as e:
         logger.error(f"Ошибка при сравнении файлов '{file1}' и '{file2}': {e}")
         return False
@@ -28,7 +33,7 @@ def group_by_hash(files, hash_type='blake3'):
     Вычисляет хэш для каждого файла и группирует файлы по полученному значению.
     """
     hash_dict = {}
-    for file in files:
+    for file in tqdm(files, desc="Группировка файлов"):
         h = compute_hash(file, hash_type)
         if h:
             hash_dict.setdefault(h, []).append(file)
@@ -42,6 +47,7 @@ def verify_by_byte(files):
     """
     confirmed = []
     files_copy = files.copy()
+    pbar = tqdm(total=len(files), desc="Верификация файлов", unit="файл")
     while files_copy:
         ref = files_copy.pop(0)
         entry = [get_file_info(ref)]
@@ -54,6 +60,8 @@ def verify_by_byte(files):
         files_copy = non_dup
         if len(entry) > 1:
             confirmed.extend(entry)
+        pbar.update(1)
+    pbar.close()
     return confirmed
 
 
@@ -66,7 +74,7 @@ def find_potential_duplicates(files, hash_type='blake3'):
     """
     duplicates = {}
     hash_groups = group_by_hash(files, hash_type)
-    for h, group in hash_groups.items():
+    for h, group in tqdm(hash_groups.items(), desc="Поиск дубликатов", unit="группы"):
         if len(group) < 2:
             continue
         verified = verify_by_byte(group)

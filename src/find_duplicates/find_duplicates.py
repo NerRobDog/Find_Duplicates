@@ -1,3 +1,4 @@
+from tqdm import tqdm
 from modules import scanner, grouper, comparer, output, logger, utils, hasher
 import logging, os
 
@@ -7,43 +8,36 @@ logging.root = logger.logger.logger
 def main():
     """
     Главный скрипт для поиска дубликатов файлов.
-    Выполняет:
-      1. Парсинг аргументов.
-      2. Настройку логгера.
-      3. Валидацию директории.
-      4. Сканирование с учётом исключений и скрытых файлов.
-      5. Группировку файлов по размеру.
-      6. Предварительную фильтрацию с использованием get_partial_content и выбор этапов проверки
-         (хэш‑верификация, побайтовое сравнение, параллельное вычисление) – управляется флагами.
-      7. Вывод результатов в CSV.
+    Этапы обработки:
+      1. Сканирование директорий (получение полного списка файлов).
+      2. Группировка файлов по размеру.
+      3. Фильтрация каждой группы по partial-содержимому.
+      4. Группировка по хэшу (если включено) или по весу (если отключено) для отфильтрованных кандидатов.
+      5. Побайтовое сравнение для окончательной верификации (если включено).
+      6. Вывод результатов в CSV.
     """
-    # 1. Парсинг аргументов
+    # 1. Парсинг аргументов и настройка логгера
     args = utils.parse_arguments()
-
-    # 2. Настройка логгера
     logger.setup_logger(args.log_level)
     logging.debug(f"Аргументы: {args}")
-    logging.info(f"Скрипт запущен.")
+    logging.info("Скрипт запущен.")
 
-    # 3. Валидация директории и сбор файлов
+    # 2. Сканирование директорий
     all_files = []
-    # Используем args.directory (список директорий)
-    for directory in args.directory:
+    for directory in tqdm(args.directory, desc="Сканирование директорий", unit=" дир"):
         try:
             if not utils.validate_directory(directory):
                 logging.error(f"Директория '{directory}' не найдена или недоступна.")
-                # Если одна из директорий недоступна, пропускаем её, а не завершаем выполнение
                 continue
         except Exception as e:
             logging.error(f"Ошибка при проверке директории '{directory}': {e}")
             continue
-
-        # 4. Сканирование текущей директории
         files = scanner.scan_directory(
             directory=directory,
             include_hidden=args.include_hidden,
             skip_inaccessible=args.skip_inaccessible,
             exclude=args.exclude
+            # pbar можно передать, если нужен общий progress bar
         )
         all_files.extend(files)
     if not all_files:
@@ -51,74 +45,88 @@ def main():
         output.write_duplicates_to_csv({}, args.output)
         return
 
-    # 5. Группировка файлов по размеру
-    grouped_files = grouper.group_files_by_size(all_files)
-    if not grouped_files:
+    # 3. Группировка по размеру
+    size_groups = grouper.group_files_by_size(all_files)
+    if not size_groups:
         logging.info("Нет групп файлов с одинаковым размером — дубликаты не обнаружены.")
         output.write_duplicates_to_csv({}, args.output)
         return
-    logging.info(f"Найдено {len(grouped_files)} групп файлов с одинаковым размером.")
+    logging.info(f"Найдено {len(size_groups)} групп по размеру.")
 
-    # 6. Для каждой группы по размеру: предварительная фильтрация по partial content и выбор этапов проверки
-    duplicates = {}
-    for size, file_group in grouped_files.items():
+    # 4. Фильтрация по partial-содержимому для всех групп.
+    # Для каждой группы по размеру вычисляем partial-содержимое (например, первые и последние 1КБ).
+    # Оставляем только те группы, где 2 и более файла имеют одинаковое partial-содержимое.
+    partial_candidates = {}  # ключ: (size, partial_key), значение: список файлов
+    for size, file_group in tqdm(size_groups.items(), desc="Partial фильтрация", unit=" группа "):
         if len(file_group) < 2:
             continue
-        # Предварительное разделение по get_partial_content (например, читаем по 1 КБ с начала и конца)
-        partial_groups = {}
+        partial_dict = {}
         for file in file_group:
             try:
-                start, end = hasher.get_partial_content(file)
-                key = (start, end)
-                partial_groups.setdefault(key, []).append(file)
+                key = hasher.get_partial_content(file)
+                partial_dict.setdefault(key, []).append(file)
             except Exception as e:
                 logging.error(f"Ошибка при получении partial content для {file}: {e}")
                 continue
-        # logging.info(f"Найдено {len(partial_groups)} частичных групп для размера {size}.")
-        for partial_key, partial_group in partial_groups.items():
-            if len(partial_group) < 2:
-                continue
-            # Если отключен этап хэш-верификации
-            if args.disable_hash_check:
-                # logging.info(f'Верификация отключена.')
-                if args.disable_byte_compare:
-                    duplicates[f"size_{size}"] = [utils.get_file_info(f) for f in partial_group]
-                else:
-                    logging.info(f'Проверка по байтам отключена.')
-                    verified = comparer.verify_by_byte(partial_group)
-                    if verified:
-                        duplicates[f"size_{size}"] = verified
-            else:
-                # Хэш-верификация включена
-                if args.parallel:
-                    from modules.hasher import compute_hash_parallel
-                    workers = args.workers or os.cpu_count()
-                    hash_results = compute_hash_parallel(partial_group, args.hash_type, num_workers=workers)
-                    hash_groups = {}
-                    for file, h in hash_results.items():
-                        if h:
-                            hash_groups.setdefault(h, []).append(file)
-                else:
-                    hash_groups = comparer.group_by_hash(partial_group, args.hash_type)
-                for h, group in hash_groups.items():
-                    if len(group) < 2:
-                        continue
-                    if args.disable_byte_compare:
-                        logging.info(f'Проверка по байтам отключена.')
-                        duplicates[h] = [utils.get_file_info(f) for f in group]
-                    else:
-                        logging.info(f'Проверка по байтам группы {h}:')
-                        verified = comparer.verify_by_byte(group)
-                        if verified:
-                            duplicates[h] = verified
+        for key, group in partial_dict.items():
+            if len(group) >= 2:
+                partial_candidates[(size, key)] = group
+    if not partial_candidates:
+        logging.info("Нет кандидатов после partial фильтрации.")
+        output.write_duplicates_to_csv({}, args.output)
+        return
+    logging.info(f"Найдено {len(partial_candidates)} групп после partial фильтрации.")
 
-    if not duplicates:
-        logging.info("Дубликаты не обнаружены.")
+    # 5. Группировка по хэшу или по весу (если хэш отключён) для каждого partial-кандидата.
+    hash_candidates = {}
+    for (size, p_key), group in tqdm(partial_candidates.items(), desc="Группировка по хэшу", unit=" групп "):
+        if not args.disable_hash_check:
+            # Если хэширование включено, группируем по хэшу
+            if args.parallel:
+                from modules.hasher import compute_hash_parallel
+                workers = args.workers or os.cpu_count()
+                hash_results = compute_hash_parallel(group, args.hash_type, num_workers=workers)
+                group_by = {}
+                for file, h in hash_results.items():
+                    if h:
+                        group_by.setdefault(h, []).append(file)
+            else:
+                group_by = comparer.group_by_hash(group, args.hash_type)
+        else:
+            # Если хэширование отключено, используем вес (размер) как ключ
+            group_by = {size: group}
+
+        for key, g in group_by.items():
+            if len(g) >= 2:
+                # Объединяем группы, если несколько partial-групп дают один и тот же ключ
+                hash_candidates.setdefault(key, []).extend(g)
+    if not hash_candidates:
+        logging.info("Нет кандидатов после группировки по хэшу/весу.")
+        output.write_duplicates_to_csv({}, args.output)
+        return
+    # Если используется хэширование, логируем по числу групп по хэшу, иначе по числу групп по весу.
+    if not args.disable_hash_check:
+        logging.info(f"Найдено {len(hash_candidates)} групп после хэширования.")
+    else:
+        logging.info(f"Найдено {len(hash_candidates)} групп после фильтрации по весу.")
+
+    # 6. Побайтовое сравнение для окончательной верификации (если включено)
+    final_duplicates = {}
+    for key, group in tqdm(hash_candidates.items(), desc="Побайтовая проверка", unit=" группа"):
+        if not args.disable_byte_compare:
+            logging.info(f"Проверка по байтам для группы {key}:")
+            verified = comparer.verify_by_byte(group)
+            if verified and len(verified) >= 2:
+                final_duplicates[key] = verified
+        else:
+            final_duplicates[key] = [utils.get_file_info(f) for f in group]
+    if not final_duplicates:
+        logging.info("Дубликаты не обнаружены после побайтовой проверки.")
         output.write_duplicates_to_csv({}, args.output)
         return
 
-    # 7. Вывод результатов
-    if output.write_duplicates_to_csv(duplicates, args.output):
+    # 7. Вывод результатов в CSV
+    if output.write_duplicates_to_csv(final_duplicates, args.output):
         logging.info(f"Поиск завершён. Результаты сохранены в '{args.output}'.")
     else:
         logging.error("Ошибка при записи результатов в файл CSV.")

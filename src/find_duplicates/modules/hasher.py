@@ -1,8 +1,9 @@
 import hashlib
 import os
 from concurrent.futures import as_completed, ProcessPoolExecutor
+from tqdm import tqdm
 from .logger import logger, log_execution
-from .utils import handle_error
+from .utils import handle_error, get_file_info
 
 try:
     import blake3
@@ -31,8 +32,10 @@ def compute_hash(filepath, hash_type='blake3', chunk_size=4 * 1024 * 1024):
         else:
             hash_func = hashlib.new(hash_type)
 
+        total_size = get_file_info(filepath)['size']
         logger.debug(f"Чтение файла '{filepath}' для вычисления хэша")
-        with open(filepath, 'rb') as f:
+        with open(filepath, 'rb') as f, tqdm(total=total_size, unit='B', unit_scale=True,
+                                             desc=f"Хэширование {get_file_info(filepath)['path']}", leave=False):
             for chunk in iter(lambda: f.read(chunk_size), b''):
                 hash_func.update(chunk)
 
@@ -68,8 +71,7 @@ def compute_hash_parallel(filepaths, hash_type='blake3', num_workers=None):
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         future_to_file = {executor.submit(compute_hash, filepath, hash_type): filepath for filepath in filepaths}
 
-        for future in as_completed(future_to_file):
-            logger.debug(f"Файл {future_to_file[future]} обрабатывается")
+        for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Вычисление хэшей"):
             filepath = future_to_file[future]
             try:
                 result = future.result()

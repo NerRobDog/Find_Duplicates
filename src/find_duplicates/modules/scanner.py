@@ -4,7 +4,7 @@ from .logger import logger, log_execution
 
 
 @log_execution(level="DEBUG", message="Сканирование директории")
-def scan_directory(directory, include_hidden=False, skip_inaccessible=False, exclude=None) -> list:
+def scan_directory(directory, include_hidden=False, skip_inaccessible=False, exclude=None, pbar=None) -> list:
     """
     Обходит директорию рекурсивно и возвращает список файлов.
 
@@ -16,6 +16,8 @@ def scan_directory(directory, include_hidden=False, skip_inaccessible=False, exc
     :type skip_inaccessible: Bool
     :param exclude: Список регулярных выражений для исключения файлов.
     :type exclude: List[str]
+    :param pbar: Прогрессбар для отображения прогресса сканирования.
+    :type pbar: tqdm.tqdm
     :return: Список файлов.
     :rtype: List[str]
     """
@@ -25,7 +27,10 @@ def scan_directory(directory, include_hidden=False, skip_inaccessible=False, exc
     def scan(dir_path):
         try:
             with os.scandir(dir_path) as entries:
-                for entry in entries:
+                entries_list = list(entries)
+                for entry in entries_list:
+                    if pbar is not None:
+                        pbar.update(1)
                     # 1) Скрытые файлы, если include_hidden=False, пропускаем
                     if not include_hidden and entry.name.startswith('.'):
                         continue
