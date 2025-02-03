@@ -11,9 +11,9 @@ def main():
     Этапы обработки:
       1. Сканирование директорий (получение полного списка файлов).
       2. Группировка файлов по размеру.
-      3. Фильтрация каждой группы по partial-содержимому.
-      4. Группировка по хэшу (если включено) или по весу (если отключено) для отфильтрованных кандидатов.
-      5. Побайтовое сравнение для окончательной верификации (если включено).
+      3. (Опционально) Фильтрация каждой группы по partial-содержимому.
+      4. (Опционально) Группировка по хэшу для отфильтрованных кандидатов или по весу, если хэширование отключено.
+      5. (Опционально) Побайтовое сравнение для окончательной верификации.
       6. Вывод результатов в CSV.
     """
     # 1. Парсинг аргументов и настройка логгера
@@ -37,7 +37,6 @@ def main():
             include_hidden=args.include_hidden,
             skip_inaccessible=args.skip_inaccessible,
             exclude=args.exclude
-            # pbar можно передать, если нужен общий progress bar
         )
         all_files.extend(files)
     if not all_files:
@@ -53,35 +52,40 @@ def main():
         return
     logging.info(f"Найдено {len(size_groups)} групп по размеру.")
 
-    # 4. Фильтрация по partial-содержимому для всех групп.
-    # Для каждой группы по размеру вычисляем partial-содержимое (например, первые и последние 1КБ).
-    # Оставляем только те группы, где 2 и более файла имеют одинаковое partial-содержимое.
-    partial_candidates = {}  # ключ: (size, partial_key), значение: список файлов
-    for size, file_group in tqdm(size_groups.items(), desc="Partial фильтрация", unit=" группа "):
-        if len(file_group) < 2:
-            continue
-        partial_dict = {}
-        for file in file_group:
-            try:
-                key = hasher.get_partial_content(file)
-                partial_dict.setdefault(key, []).append(file)
-            except Exception as e:
-                logging.error(f"Ошибка при получении partial content для {file}: {e}")
+    # 4. (Опционально) Фильтрация по partial-содержимому для всех групп.
+    # Если флаг disable_partial установлен, пропускаем этот этап и берем всю группу как кандидат.
+    partial_candidates = {}  # Ключ: (size, partial_key) или просто size, значение: список файлов
+    if not args.disable_partial:
+        for size, file_group in tqdm(size_groups.items(), desc="Partial фильтрация", unit=" группа "):
+            if len(file_group) < 2:
                 continue
-        for key, group in partial_dict.items():
-            if len(group) >= 2:
-                partial_candidates[(size, key)] = group
-    if not partial_candidates:
-        logging.info("Нет кандидатов после partial фильтрации.")
-        output.write_duplicates_to_csv({}, args.output)
-        return
-    logging.info(f"Найдено {len(partial_candidates)} групп после partial фильтрации.")
+            partial_dict = {}
+            for file in file_group:
+                try:
+                    key = hasher.get_partial_content(file)
+                    partial_dict.setdefault(key, []).append(file)
+                except Exception as e:
+                    logging.error(f"Ошибка при получении partial content для {file}: {e}")
+                    continue
+            for key, group in partial_dict.items():
+                if len(group) >= 2:
+                    partial_candidates[(size, key)] = group
+        if not partial_candidates:
+            logging.info("Нет кандидатов после partial фильтрации.")
+            output.write_duplicates_to_csv({}, args.output)
+            return
+        logging.info(f"Найдено {len(partial_candidates)} групп после partial фильтрации.")
+    else:
+        # Если partial отключен, берем группы по размеру целиком
+        for size, file_group in size_groups.items():
+            if len(file_group) >= 2:
+                partial_candidates[(size, None)] = file_group
+        logging.info(f"Partial фильтрация отключена. Используем {len(partial_candidates)} групп по весу.")
 
-    # 5. Группировка по хэшу или по весу (если хэш отключён) для каждого partial-кандидата.
+    # 5. Группировка по хэшу для каждого кандидата
     hash_candidates = {}
     for (size, p_key), group in tqdm(partial_candidates.items(), desc="Группировка по хэшу", unit=" групп "):
         if not args.disable_hash_check:
-            # Если хэширование включено, группируем по хэшу
             if args.parallel:
                 from modules.hasher import compute_hash_parallel
                 workers = args.workers or os.cpu_count()
@@ -93,24 +97,21 @@ def main():
             else:
                 group_by = comparer.group_by_hash(group, args.hash_type)
         else:
-            # Если хэширование отключено, используем вес (размер) как ключ
+            # Если хэширование отключено, используем вес как ключ
             group_by = {size: group}
-
         for key, g in group_by.items():
             if len(g) >= 2:
-                # Объединяем группы, если несколько partial-групп дают один и тот же ключ
                 hash_candidates.setdefault(key, []).extend(g)
     if not hash_candidates:
         logging.info("Нет кандидатов после группировки по хэшу/весу.")
         output.write_duplicates_to_csv({}, args.output)
         return
-    # Если используется хэширование, логируем по числу групп по хэшу, иначе по числу групп по весу.
     if not args.disable_hash_check:
         logging.info(f"Найдено {len(hash_candidates)} групп после хэширования.")
     else:
         logging.info(f"Найдено {len(hash_candidates)} групп после фильтрации по весу.")
 
-    # 6. Побайтовое сравнение для окончательной верификации (если включено)
+    # 6. (Опционально) Побайтовое сравнение для окончательной верификации
     final_duplicates = {}
     for key, group in tqdm(hash_candidates.items(), desc="Побайтовая проверка", unit=" группа"):
         if not args.disable_byte_compare:

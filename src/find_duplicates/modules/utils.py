@@ -117,6 +117,8 @@ def parse_arguments():
                         help="Отключить этап вычисления и проверки хэша")
     parser.add_argument("--disable-byte-compare", action="store_true",
                         help="Отключить этап побайтового сравнения файлов")
+    parser.add_argument("--disable-partial", action="store_true",
+                        help="Отключить чтение partial-содержимого")
 
     args = parser.parse_args()
     logger.debug(f"Аргументы успешно распознаны: {args}")
